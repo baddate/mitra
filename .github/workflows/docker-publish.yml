@@ -1,0 +1,159 @@
+# .github/workflows/docker.yml
+#
+# Build and publish the Mitra Docker image to GitHub Container Registry (ghcr.io).
+#
+# Triggers:
+#   push      – every push to `main` publishes a `latest` image
+#   tags      – semver tags (v*.*.*) publish a versioned + latest image
+#   PR        – build-only (no push) to catch breakage early
+#   manual    – workflow_dispatch for ad-hoc releases
+#
+# Required repository secrets / variables:
+#   None – GITHUB_TOKEN is provided automatically by Actions.
+#
+# Optional repository variables (Settings → Variables):
+#   FRONTEND_REPO    override the mitra-web git URL
+#   FRONTEND_BRANCH  override the mitra-web branch (default: main)
+
+name: Docker
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Limit concurrent runs on the same ref to avoid redundant builds.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # Image name defaults to <org>/<repo>, e.g. ghcr.io/baddate/mitra
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    name: Build & push
+    runs-on: ubuntu-latest
+
+    # Allow the job to write packages (push to ghcr.io)
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Set up QEMU for cross-platform builds (arm64 etc.)
+      # -----------------------------------------------------------------------
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # -----------------------------------------------------------------------
+      # 3. Set up Docker Buildx (required for multi-platform & cache exports)
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -----------------------------------------------------------------------
+      # 4. Log in to GHCR (skipped on PRs from forks – no write permission)
+      # -----------------------------------------------------------------------
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 5. Derive image tags and labels from git metadata
+      #
+      #   push to main  → ghcr.io/<org>/mitra:latest
+      #   push v1.2.3   → ghcr.io/<org>/mitra:1.2.3
+      #                   ghcr.io/<org>/mitra:1.2
+      #                   ghcr.io/<org>/mitra:1
+      #                   ghcr.io/<org>/mitra:latest
+      #   pull request  → ghcr.io/<org>/mitra:pr-<number>  (not pushed)
+      # -----------------------------------------------------------------------
+      - name: Extract metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Branch push → :latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # Semver tag → :1.2.3, :1.2, :1
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # PR → :pr-42 (build only, not pushed)
+            type=ref,event=pr
+            # Short SHA for every build (useful for debugging)
+            type=sha,prefix=sha-,format=short
+
+      # -----------------------------------------------------------------------
+      # 6. Build (and push on non-PR events)
+      #
+      # Cache strategy: GitHub Actions cache backend
+      #   mode=max  – caches all intermediate layers, not just the final image.
+      #   This dramatically speeds up the cargo-chef dependency layer.
+      # -----------------------------------------------------------------------
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: contrib/docker/Dockerfile
+          # Build for amd64 and arm64; remove arm64 if cross-compilation is too slow
+          platforms: linux/amd64,linux/arm64
+          # Only push on non-PR events
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Pass optional frontend overrides as build-args
+          build-args: |
+            FRONTEND_REPO=${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
+            FRONTEND_BRANCH=${{ vars.FRONTEND_BRANCH || 'main' }}
+          # Layer cache: restore from previous runs, export new layers after build
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      # 7. Print image digest for traceability in the Actions log
+      # -----------------------------------------------------------------------
+      - name: Image digest
+        if: github.event_name != 'pull_request'
+        run: echo "Pushed ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}"
+
+      # -----------------------------------------------------------------------
+      # 8. Install cosign
+      # -----------------------------------------------------------------------
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      # -----------------------------------------------------------------------
+      # 9. Sign the image with GitHub OIDC token (keyless signing)
+      #    No secrets needed – identity is bound to this Actions run.
+      # -----------------------------------------------------------------------
+      - name: Sign image
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          echo "${TAGS}" | xargs -I {} cosign sign --yes \
+            {}@${DIGEST}

@@ -1,0 +1,76 @@
+# compose.yml
+#
+# Run Mitra using the pre-built image from GitHub Container Registry.
+#
+# Quick start:
+#   1. Copy config:  cp /usr/share/mitra/examples/config.example.yaml ./config.yaml
+#   2. Edit config:  $EDITOR config.yaml   (set domain, db credentials, etc.)
+#   3. Start:        docker compose up -d
+#
+# Upgrading:
+#   docker compose pull && docker compose up -d
+#
+# Viewing logs:
+#   docker compose logs -f mitra
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL – primary datastore
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:17-alpine
+    container_name: mitra-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mitra
+      POSTGRES_USER: mitra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mitra}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mitra -d mitra"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Do not expose the DB port to the host by default.
+    # Uncomment the line below only for local debugging.
+    # ports: ["127.0.0.1:5432:5432"]
+
+  # ---------------------------------------------------------------------------
+  # Mitra
+  # ---------------------------------------------------------------------------
+  app:
+    image: ghcr.io/baddate/mitra:latest
+    container_name: mitra-server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Expose only on localhost; let a reverse proxy (nginx/Caddy) handle TLS.
+      - "127.0.0.1:8380:8380"
+    volumes:
+      # Main config file – must exist before first start (see Quick start above)
+      - ./config.yaml:/etc/mitra/config.yaml:ro
+      # Persistent media uploads and instance data
+      - mitra_data:/var/lib/mitra
+    environment:
+      # Rust log level: error | warn | info | debug | trace
+      RUST_LOG: ${RUST_LOG:-info}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:8080/api/v1/instance || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  db_data:
+    driver: local
+  mitra_data:
+    driver: local
