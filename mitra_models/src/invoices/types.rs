@@ -1,5 +1,5 @@
 use apx_core::caip2::ChainId;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use postgres_protocol::types::{text_from_sql, text_to_sql};
 use postgres_types::{
     accepts,
@@ -151,6 +151,29 @@ pub struct Invoice {
 }
 
 impl Invoice {
+    pub(super) fn check_consistency(&self) -> Result<(), DatabaseTypeError> {
+        if self.object_id.is_none() {
+            // Local invoice
+            if !self.chain_id.inner().is_monero() {
+                return Err(DatabaseTypeError);
+            };
+            if self.payment_address.is_none() {
+                return Err(DatabaseTypeError);
+            };
+        } else {
+            // Remote invoice
+            if self.payout_tx_id.is_some() {
+                return Err(DatabaseTypeError);
+            };
+            if self.payment_address.is_none()
+                && self.invoice_status != InvoiceStatus::Requested
+            {
+                return Err(DatabaseTypeError);
+            };
+        };
+        Ok(())
+    }
+
     pub fn amount_u64(&self) -> Result<u64, DatabaseTypeError> {
         u64::try_from(self.amount).map_err(|_| DatabaseTypeError)
     }
@@ -208,6 +231,10 @@ impl Invoice {
             InvoiceStatus::Requested => panic!("payment address is not known"),
             _ => self.payment_address.clone().ok_or(DatabaseTypeError),
         }
+    }
+
+    pub fn expires_at(&self, timeout: u32) -> DateTime<Utc> {
+        self.created_at + TimeDelta::seconds(timeout.into())
     }
 }
 

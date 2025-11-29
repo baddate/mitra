@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [4.14.0] - 2025-11-28
+
+### Added
+
+- Added `timelines_access` property to `/api/v2/instance` response ([#191](https://codeberg.org/silverpill/mitra/pulls/191)).
+- Added API endpoints for session management.
+- Allow adding subscribers when Monero integration is not enabled.
+
+### Changed
+
+- Write client name to log every time an access token is generated.
+- Always verify client ID if provided in token request.
+- Associate access tokens with OAuth applications.
+- Changed default access token lifetime to 30 days.
+- Verify public keys, identity proofs and payment options when reading profiles from database.
+- Write warning to log if reaction is followers-only.
+
+### Fixed
+
+- Fixed remote invoices not expiring if Monero integration is not enabled.
+
 ## [4.13.1] - 2025-11-19
 
 ### Changed
