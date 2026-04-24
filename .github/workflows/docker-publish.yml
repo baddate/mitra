@@ -118,7 +118,7 @@ jobs:
           context: .
           file: contrib/docker/Dockerfile
           # Build for amd64 and arm64; remove arm64 if cross-compilation is too slow
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           # Only push on non-PR events
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
