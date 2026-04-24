@@ -1,18 +1,8 @@
 #!/bin/sh
-# docker-entrypoint.sh
-#
-# Bootstraps the Mitra container on first start:
-#   - Copies the example config when no config.yaml is present yet.
-#   - Hands off to the main process via exec so signals are forwarded
-#     correctly and the application remains PID 1.
-#
-# Usage (set by Dockerfile):
-#   ENTRYPOINT ["docker-entrypoint.sh"]
-#   CMD        ["mitra", "server"]
-
 set -e
 
 CONF_DIR="/etc/mitra"
+
 TOML_CONF="$CONF_DIR/config.toml"
 YAML_CONF="$CONF_DIR/config.yaml"
 
@@ -20,27 +10,48 @@ TOML_EXAMPLE="/usr/share/mitra/examples/config.example.toml"
 YAML_EXAMPLE="/usr/share/mitra/examples/config.example.yaml"
 
 # ---------------------------------------------------------------------------
-# First-run config bootstrap
+# 1. Resolve config file (priority: ENV > existing > bootstrap)
 # ---------------------------------------------------------------------------
-if [ -f "$TOML_CONF" ]; then
-    echo "[entrypoint] Found existing TOML config at $TOML_CONF"
+
+if [ -n "$CONFIG_PATH" ]; then
+    CONFIG_FILE="$CONFIG_PATH"
+    echo "[entrypoint] Using config from ENV: $CONFIG_FILE"
+
+elif [ -f "$TOML_CONF" ]; then
+    CONFIG_FILE="$TOML_CONF"
+    echo "[entrypoint] Found TOML config"
+
 elif [ -f "$YAML_CONF" ]; then
-    echo "[entrypoint] Found existing YAML config at $YAML_CONF"
+    CONFIG_FILE="$YAML_CONF"
+    echo "[entrypoint] Found YAML config"
+
 else
-    echo "[entrypoint] No configuration found. Initializing..."
+    echo "[entrypoint] No config found, bootstrapping..."
     mkdir -p "$CONF_DIR"
 
     if [ -f "$TOML_EXAMPLE" ]; then
-        echo "[entrypoint] Copying TOML example to $TOML_CONF"
         cp "$TOML_EXAMPLE" "$TOML_CONF"
+        CONFIG_FILE="$TOML_CONF"
+        echo "[entrypoint] Initialized TOML config"
+
     elif [ -f "$YAML_EXAMPLE" ]; then
-        echo "[entrypoint] TOML example missing, copying YAML example to $YAML_CONF"
         cp "$YAML_EXAMPLE" "$YAML_CONF"
+        CONFIG_FILE="$YAML_CONF"
+        echo "[entrypoint] Initialized YAML config"
+
     else
-        echo "[entrypoint] Error: No example configuration files found!"
+        echo "[entrypoint] ERROR: no example config found"
         exit 1
     fi
 fi
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "[entrypoint] $CONFIG_FILE not found - copying example config."
+    echo "[entrypoint] Edit $CONFIG_FILE before restarting the container."
+    cp "$EXAMPLE_CONFIG" "$CONFIG_FILE"
+fi
+
+echo "[entrypoint] Final config: $CONFIG_FILE"
 
 # ---------------------------------------------------------------------------
 # Hand off to the application (or any command passed to `docker run`)

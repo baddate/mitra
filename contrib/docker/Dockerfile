@@ -115,6 +115,8 @@ RUN mkdir -p \
 # Ship the example config so users can reference it
 COPY --from=builder /app/config.example.* /usr/share/mitra/examples/
 
+RUN echo "====app dir===" && ls /usr/share/mitra/examples
+
 # Frontend static assets
 COPY --from=frontend-build /app/dist /usr/share/mitra/www/
 
