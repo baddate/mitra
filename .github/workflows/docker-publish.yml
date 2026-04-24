@@ -2,14 +2,25 @@
 #
 # Build and publish the Mitra Docker image to GitHub Container Registry (ghcr.io).
 #
-# Triggers:
-#   push      – every push to `main` publishes a `latest` image
-#   tags      – semver tags (v*.*.*) publish a versioned + latest image
-#   PR        – build-only (no push) to catch breakage early
-#   manual    – workflow_dispatch for ad-hoc releases
+# Architecture:
+#   build   – matrix job: amd64 and arm64 run in parallel on native runners.
+#             Each job pushes a per-arch image digest (not yet tagged).
+#   merge   – collects both digests and creates a single multi-arch manifest,
+#             then applies all final tags (latest, semver, sha).
 #
-# Required repository secrets / variables:
-#   None – GITHUB_TOKEN is provided automatically by Actions.
+# Why matrix instead of QEMU?
+#   QEMU emulates the foreign arch in software – arm64 Rust compilation under
+#   QEMU on an amd64 host can take 3-5× longer than native.  Running each arch
+#   on its own runner eliminates emulation overhead entirely.
+#
+# Triggers:
+#   push to main  → :latest
+#   semver tag    → :1.2.3  :1.2  :1  :latest
+#   pull request  → build only (no push)
+#   manual        → workflow_dispatch
+#
+# Required secrets / variables:
+#   None   – GITHUB_TOKEN is supplied automatically.
 #
 # Optional repository variables (Settings → Variables):
 #   FRONTEND_REPO    override the mitra-web git URL
@@ -28,25 +39,39 @@ on:
       - main
   workflow_dispatch:
 
-# Limit concurrent runs on the same ref to avoid redundant builds.
 concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  # Image name defaults to <org>/<repo>, e.g. ghcr.io/baddate/mitra
   IMAGE_NAME: ${{ github.repository }}
 
+# ---------------------------------------------------------------------------
+# Job 1 – build
+# Runs twice in parallel: once for amd64, once for arm64.
+# Each run pushes a bare digest (no human-readable tag) and uploads the
+# digest string as an artifact so the merge job can find it.
+# ---------------------------------------------------------------------------
 jobs:
-  build-and-push:
-    name: Build & push
-    runs-on: ubuntu-latest
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
 
-    # Allow the job to write packages (push to ghcr.io)
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      fail-fast: false # let the other arch finish even if one fails
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            cache_key: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            cache_key: arm64
 
     steps:
       # -----------------------------------------------------------------------
@@ -56,37 +81,127 @@ jobs:
         uses: actions/checkout@v4
 
       # -----------------------------------------------------------------------
-      # 2. Set up QEMU for cross-platform builds (arm64 etc.)
-      # -----------------------------------------------------------------------
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      # -----------------------------------------------------------------------
-      # 3. Set up Docker Buildx (required for multi-platform & cache exports)
+      # 2. Set up Docker Buildx
+      #    No QEMU needed – each runner is already the target architecture.
       # -----------------------------------------------------------------------
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # -----------------------------------------------------------------------
-      # 4. Log in to GHCR (skipped on PRs from forks – no write permission)
+      # 3. Log in to GHCR
       # -----------------------------------------------------------------------
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # -----------------------------------------------------------------------
-      # 5. Derive image tags and labels from git metadata
-      #
-      #   push to main  → ghcr.io/<org>/mitra:latest
-      #   push v1.2.3   → ghcr.io/<org>/mitra:1.2.3
-      #                   ghcr.io/<org>/mitra:1.2
-      #                   ghcr.io/<org>/mitra:1
-      #                   ghcr.io/<org>/mitra:latest
-      #   pull request  → ghcr.io/<org>/mitra:pr-<number>  (not pushed)
+      # 4. Derive labels (tags are applied later by the merge job)
+      # -----------------------------------------------------------------------
+      - name: Extract metadata (labels only)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      # -----------------------------------------------------------------------
+      # 5. Build and push a digest-only image
+      #    `outputs: type=image,push-by-digest=true` pushes the image without
+      #    attaching any tag – just a raw sha256 digest in the registry.
+      #    The merge job will create the manifest + tags from these digests.
+      # -----------------------------------------------------------------------
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: contrib/docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          # Push digest on non-PR; on PR just build to verify compilation.
+          outputs: >-
+            type=image,
+            name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},
+            push-by-digest=${{ github.event_name != 'pull_request' }},
+            name-canonical=true,
+            push=${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FRONTEND_REPO=${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
+            FRONTEND_BRANCH=${{ vars.FRONTEND_BRANCH || 'main' }}
+          # Per-arch cache bucket so the two jobs never overwrite each other.
+          cache-from: type=gha,scope=${{ matrix.cache_key }}
+          cache-to: type=gha,scope=${{ matrix.cache_key }},mode=max
+
+      # -----------------------------------------------------------------------
+      # 6. Export the digest to a file and upload it as a workflow artifact.
+      #    The merge job downloads all arch artifacts and reads the digests.
+      # -----------------------------------------------------------------------
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          # Write an empty file whose *name* is the digest (sha256: prefix stripped).
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.cache_key }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Job 2 – merge
+  # Downloads both digest artifacts, creates a multi-arch manifest list, and
+  # pushes all final tags (latest, semver, sha, etc.).
+  # ---------------------------------------------------------------------------
+  merge:
+    name: Merge manifests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    needs: build
+
+    permissions:
+      contents: read
+      packages: write
+      # Required for keyless cosign signing via OIDC
+      id-token: write
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Download digest files from both arch jobs
+      # -----------------------------------------------------------------------
+      - name: Download digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true # flatten into a single directory
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Buildx (needed for `docker buildx imagetools`)
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # -----------------------------------------------------------------------
+      # 3. Log in to GHCR
+      # -----------------------------------------------------------------------
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 4. Compute final tags
       # -----------------------------------------------------------------------
       - name: Extract metadata (tags & labels)
         id: meta
@@ -94,66 +209,48 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Branch push → :latest
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            # Semver tag → :1.2.3, :1.2, :1
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # PR → :pr-42 (build only, not pushed)
-            type=ref,event=pr
-            # Short SHA for every build (useful for debugging)
             type=sha,prefix=sha-,format=short
 
       # -----------------------------------------------------------------------
-      # 6. Build (and push on non-PR events)
+      # 5. Create and push the multi-arch manifest
+      #    Reads every file in /tmp/digests (one per arch), assembles them into
+      #    a manifest list, and tags it with all computed tags.
+      # -----------------------------------------------------------------------
+      - name: Create multi-arch manifest and push tags
+        working-directory: /tmp/digests
+        run: |
+          SOURCES=$(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          TAGS=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}')
+          docker buildx imagetools create $TAGS $SOURCES
+
+      # -----------------------------------------------------------------------
+      # 6. Verify the manifest looks correct
+      # -----------------------------------------------------------------------
+      - name: Inspect manifest
+        run: |
+          docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+      # -----------------------------------------------------------------------
+      # 7. Keyless cosign signing via Sigstore OIDC – no secrets needed.
+      #    Identity is bound to this exact Actions run and verifiable by anyone.
       #
-      # Cache strategy: GitHub Actions cache backend
-      #   mode=max  – caches all intermediate layers, not just the final image.
-      #   This dramatically speeds up the cargo-chef dependency layer.
-      # -----------------------------------------------------------------------
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: contrib/docker/Dockerfile
-          # Build for amd64 and arm64; remove arm64 if cross-compilation is too slow
-          platforms: linux/amd64
-          # Only push on non-PR events
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Pass optional frontend overrides as build-args
-          build-args: |
-            FRONTEND_REPO=${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
-            FRONTEND_BRANCH=${{ vars.FRONTEND_BRANCH || 'main' }}
-          # Layer cache: restore from previous runs, export new layers after build
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # -----------------------------------------------------------------------
-      # 7. Print image digest for traceability in the Actions log
-      # -----------------------------------------------------------------------
-      - name: Image digest
-        if: github.event_name != 'pull_request'
-        run: echo "Pushed ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}"
-
-      # -----------------------------------------------------------------------
-      # 8. Install cosign
+      #    Verify with:
+      #      cosign verify ghcr.io/<org>/mitra:latest \
+      #        --certificate-identity-regexp="https://github.com/<org>/mitra/.*" \
+      #        --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
       # -----------------------------------------------------------------------
       - name: Install cosign
-        if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.0
 
-      # -----------------------------------------------------------------------
-      # 9. Sign the image with GitHub OIDC token (keyless signing)
-      #    No secrets needed – identity is bound to this Actions run.
-      # -----------------------------------------------------------------------
-      - name: Sign image
-        if: github.event_name != 'pull_request'
-        env:
-          DIGEST: ${{ steps.build-and-push.outputs.digest }}
-          TAGS: ${{ steps.meta.outputs.tags }}
+      - name: Sign multi-arch manifest (keyless)
         run: |
-          echo "${TAGS}" | xargs -I {} cosign sign --yes \
-            {}@${DIGEST}
+          # Sign every tag produced by the merge step.
+          echo '${{ steps.meta.outputs.tags }}' | xargs -I {} cosign sign --yes \
+            {}@$(docker buildx imagetools inspect \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} \
+              --format '{{json .Manifest.Digest}}'  | tr -d '"')
