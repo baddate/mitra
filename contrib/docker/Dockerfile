@@ -110,7 +110,7 @@ RUN mkdir -p \
  && chown -R mitra:mitra /var/lib/mitra /etc/mitra
 
 # Ship the example config so users can reference it
-COPY --from=builder /app/config.example.yaml /usr/share/mitra/examples/
+COPY --from=builder /app/config.example.* /usr/share/mitra/examples/
 
 # Frontend static assets
 COPY --from=frontend-build /app/dist /usr/share/mitra/www/
@@ -125,7 +125,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 USER mitra
 
 # Expose the default HTTP port (override in config.yaml if needed)
-EXPOSE 8380
+EXPOSE 8383
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["mitra", "server"]

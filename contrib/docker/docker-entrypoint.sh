@@ -12,16 +12,34 @@
 
 set -e
 
-CONFIG_FILE=/etc/mitra/config.yaml
-EXAMPLE_CONFIG=/usr/share/mitra/examples/config.example.yaml
+CONF_DIR="/etc/mitra"
+TOML_CONF="$CONF_DIR/config.toml"
+YAML_CONF="$CONF_DIR/config.yaml"
+
+TOML_EXAMPLE="/usr/share/mitra/examples/config.example.toml"
+YAML_EXAMPLE="/usr/share/mitra/examples/config.example.yaml"
 
 # ---------------------------------------------------------------------------
 # First-run config bootstrap
 # ---------------------------------------------------------------------------
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "[entrypoint] $CONFIG_FILE not found – copying example config."
-    echo "[entrypoint] Edit $CONFIG_FILE before restarting the container."
-    cp "$EXAMPLE_CONFIG" "$CONFIG_FILE"
+if [ -f "$TOML_CONF" ]; then
+    echo "[entrypoint] Found existing TOML config at $TOML_CONF"
+elif [ -f "$YAML_CONF" ]; then
+    echo "[entrypoint] Found existing YAML config at $YAML_CONF"
+else
+    echo "[entrypoint] No configuration found. Initializing..."
+    mkdir -p "$CONF_DIR"
+
+    if [ -f "$TOML_EXAMPLE" ]; then
+        echo "[entrypoint] Copying TOML example to $TOML_CONF"
+        cp "$TOML_EXAMPLE" "$TOML_CONF"
+    elif [ -f "$YAML_EXAMPLE" ]; then
+        echo "[entrypoint] TOML example missing, copying YAML example to $YAML_CONF"
+        cp "$YAML_EXAMPLE" "$YAML_CONF"
+    else
+        echo "[entrypoint] Error: No example configuration files found!"
+        exit 1
+    fi
 fi
 
 # ---------------------------------------------------------------------------
