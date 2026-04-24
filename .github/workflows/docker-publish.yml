@@ -131,6 +131,7 @@ jobs:
           build-args: |
             FRONTEND_REPO=${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
             FRONTEND_BRANCH=${{ vars.FRONTEND_BRANCH || 'main' }}
+            VITE_BACKEND_URL=${{ vars.VITE_BACKEND_URL || 'http://localhost:8383' }}
           # Per-arch cache bucket so the two jobs never overwrite each other.
           cache-from: type=gha,scope=${{ matrix.cache_key }}
           cache-to: type=gha,scope=${{ matrix.cache_key }},mode=max

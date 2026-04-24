@@ -27,6 +27,9 @@ ARG FRONTEND_BRANCH=main
 
 RUN git clone --depth 1 --branch "$FRONTEND_BRANCH" "$FRONTEND_REPO" .
 
+ARG VITE_BACKEND_URL
+ENV VITE_BACKEND_URL=$VITE_BACKEND_URL
+
 # npm ci is faster and strictly reproducible compared to npm install
 RUN npm ci --prefer-offline \
  && npm run build
