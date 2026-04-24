@@ -64,6 +64,7 @@ COPY . .
 
 RUN cargo chef prepare --recipe-path recipe.json
 
+
 # -----------------------------------------------------------------------------
 # Stage 4 – Builder
 # Two-step compilation:
@@ -72,9 +73,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 #   2. `cargo build`      – compiles the application itself
 # -----------------------------------------------------------------------------
 FROM chef AS builder
-
-# Propagate the default config path into the binary at compile time
-ENV DEFAULT_CONFIG_PATH=/etc/mitra/config.yaml
 
 # Restore the dependency recipe from the planner stage
 COPY --from=planner /app/recipe.json recipe.json
@@ -109,13 +107,7 @@ RUN mkdir -p \
       /var/lib/mitra \
       /etc/mitra \
       /usr/share/mitra/www \
-      /usr/share/mitra/examples \
  && chown -R mitra:mitra /var/lib/mitra /etc/mitra
-
-# Ship the example config so users can reference it
-COPY --from=builder /app/config.example.* /usr/share/mitra/examples/
-
-RUN echo "====app dir===" && ls /usr/share/mitra/examples
 
 # Frontend static assets
 COPY --from=frontend-build /app/dist /usr/share/mitra/www/
@@ -123,14 +115,13 @@ COPY --from=frontend-build /app/dist /usr/share/mitra/www/
 # Application binary
 COPY --from=builder /app/target/release/mitra /usr/bin/mitra
 
-# Entrypoint script (handles first-run config bootstrap)
-COPY contrib/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
 USER mitra
 
-# Expose the default HTTP port (override in config.yaml if needed)
-EXPOSE 8383
+# Default config path; supports both yaml and toml formats.
+# Override at runtime with -e CONFIG_PATH=/path/to/config.toml
+ENV CONFIG_PATH=/etc/mitra/config.yaml
 
-ENTRYPOINT ["docker-entrypoint.sh"]
+# Expose the default HTTP port (override in config if needed)
+EXPOSE 8080
+
 CMD ["mitra", "server"]
