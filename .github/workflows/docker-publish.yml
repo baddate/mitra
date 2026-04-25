@@ -61,6 +61,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
 
     strategy:
       fail-fast: false # let the other arch finish even if one fails
@@ -107,6 +108,42 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
+      - name: Build for scan (amd64 only)
+        if: matrix.platform == 'linux/amd64'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: contrib/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan-target
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FRONTEND_REPO=${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
+            FRONTEND_BRANCH=${{ vars.FRONTEND_BRANCH || 'main' }}
+            VITE_BACKEND_URL=${{ vars.VITE_BACKEND_URL || 'http://localhost:8383' }}
+          cache-from: type=gha,scope=${{ matrix.cache_key }}
+          cache-to: type=gha,scope=${{ matrix.cache_key }},mode=max
+
+      - name: Trivy vulnerability scan
+        if: matrix.platform == 'linux/amd64'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan-target
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Upload Trivy SARIF
+        if: matrix.platform == 'linux/amd64' && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
       # -----------------------------------------------------------------------
       # 5. Build and push a digest-only image
       #    `outputs: type=image,push-by-digest=true` pushes the image without
@@ -121,11 +158,11 @@ jobs:
           file: contrib/docker/Dockerfile
           platforms: ${{ matrix.platform }}
           # Push digest on non-PR; on PR just build to verify compilation.
-          outputs: >-
-            type=image,
-            name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},
-            push-by-digest=${{ github.event_name != 'pull_request' }},
-            name-canonical=true,
+          outputs: |
+            type=image
+            name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            push-by-digest=${{ github.event_name != 'pull_request' }}
+            name-canonical=true
             push=${{ github.event_name != 'pull_request' }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -145,6 +182,7 @@ jobs:
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
+          test -n "$digest"
           # Write an empty file whose *name* is the digest (sha256: prefix stripped).
           touch "/tmp/digests/${digest#sha256:}"
 
@@ -152,7 +190,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: digest-${{ matrix.cache_key }}
+          name: digest-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -250,8 +288,8 @@ jobs:
 
       - name: Sign multi-arch manifest (keyless)
         run: |
-          # Sign every tag produced by the merge step.
-          echo '${{ steps.meta.outputs.tags }}' | xargs -I {} cosign sign --yes \
-            {}@$(docker buildx imagetools inspect \
-              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} \
-              --format '{{json .Manifest.Digest}}'  | tr -d '"')
+          DIGEST=$(docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo '${{ steps.meta.outputs.tags }}' | tr '\n' '\0' | \
+            xargs -0 -I {} cosign sign --yes "{}@${DIGEST}"
