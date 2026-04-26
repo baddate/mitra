@@ -45,7 +45,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE: ${{ github.repository }}
 
 # ---------------------------------------------------------------------------
 # Job 1 – build
@@ -102,11 +102,17 @@ jobs:
       # -----------------------------------------------------------------------
       # 4. Derive labels (tags are applied later by the merge job)
       # -----------------------------------------------------------------------
-      - name: Extract metadata (labels only)
+      - name: Compute image metadata (tags & labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
 
       - name: Build for scan (amd64 only)
         if: matrix.platform == 'linux/amd64'
@@ -117,20 +123,20 @@ jobs:
           platforms: linux/amd64
           load: true
           push: false
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan-target
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:scan-target
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             FRONTEND_REPO=${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
             FRONTEND_BRANCH=${{ vars.FRONTEND_BRANCH || 'main' }}
             VITE_BACKEND_URL=${{ vars.VITE_BACKEND_URL || 'http://localhost:8383' }}
-          cache-from: type=gha,scope=${{ matrix.cache_key }}
-          cache-to: type=gha,scope=${{ matrix.cache_key }},mode=max
+          cache-from: type=gha,scope=cgit-${{ matrix.platform }}
+          cache-to: type=gha,scope=cgit-${{ matrix.platform }},mode=max
 
       - name: Trivy vulnerability scan
         if: matrix.platform == 'linux/amd64'
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan-target
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}:scan-target
           format: sarif
           output: trivy-results.sarif
           exit-code: "1"
@@ -158,20 +164,21 @@ jobs:
           file: contrib/docker/Dockerfile
           platforms: ${{ matrix.platform }}
           # Push digest on non-PR; on PR just build to verify compilation.
-          outputs: |
-            type=image
-            name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-            push-by-digest=${{ github.event_name != 'pull_request' }}
-            name-canonical=true
+          outputs: >-
+            type=image,
+            name=${{ env.REGISTRY }}/${{ env.IMAGE }},
+            push-by-digest=${{ github.event_name != 'pull_request' }},
+            name-canonical=true,
             push=${{ github.event_name != 'pull_request' }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
           build-args: |
             FRONTEND_REPO=${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
             FRONTEND_BRANCH=${{ vars.FRONTEND_BRANCH || 'main' }}
             VITE_BACKEND_URL=${{ vars.VITE_BACKEND_URL || 'http://localhost:8383' }}
           # Per-arch cache bucket so the two jobs never overwrite each other.
-          cache-from: type=gha,scope=${{ matrix.cache_key }}
-          cache-to: type=gha,scope=${{ matrix.cache_key }},mode=max
+          cache-from: type=gha,scope=cgit-${{ matrix.platform }}
+          cache-to: type=gha,scope=cgit-${{ matrix.platform }},mode=max
 
       # -----------------------------------------------------------------------
       # 6. Export the digest to a file and upload it as a workflow artifact.
@@ -242,11 +249,11 @@ jobs:
       # -----------------------------------------------------------------------
       # 4. Compute final tags
       # -----------------------------------------------------------------------
-      - name: Extract metadata (tags & labels)
+      - name: Compute final tags
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
@@ -261,10 +268,22 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Create multi-arch manifest and push tags
         working-directory: /tmp/digests
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
         run: |
-          SOURCES=$(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
-          TAGS=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}')
-          docker buildx imagetools create $TAGS $SOURCES
+          set -euo pipefail
+          echo "Available digests:"
+          ls -l
+
+          SOURCES=$(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
+          TAGS=$(echo "$META_JSON" | jq -cr '.tags | map("-t " + .) | join(" ")')
+
+          echo "Sources: $SOURCES"
+          echo "Tags:    $TAGS"
+
+          eval docker buildx imagetools create \
+            $TAGS \
+            $SOURCES
 
       # -----------------------------------------------------------------------
       # 6. Verify the manifest looks correct
@@ -272,7 +291,7 @@ jobs:
       - name: Inspect manifest
         run: |
           docker buildx imagetools inspect \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
 
       # -----------------------------------------------------------------------
       # 7. Keyless cosign signing via Sigstore OIDC – no secrets needed.
@@ -289,7 +308,7 @@ jobs:
       - name: Sign multi-arch manifest (keyless)
         run: |
           DIGEST=$(docker buildx imagetools inspect \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.meta.outputs.version }} \
             --format '{{json .Manifest.Digest}}' | tr -d '"')
           echo '${{ steps.meta.outputs.tags }}' | tr '\n' '\0' | \
             xargs -0 -I {} cosign sign --yes "{}@${DIGEST}"
