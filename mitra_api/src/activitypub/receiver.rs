@@ -12,7 +12,6 @@ use apx_sdk::{
     utils::CoreType,
 };
 use serde_json::{Value as JsonValue};
-use thiserror::Error;
 
 use mitra_activitypub::{
     authentication::{
@@ -32,50 +31,13 @@ use mitra_models::{
     database::{
         get_database_client,
         DatabaseConnectionPool,
-        DatabaseError,
     },
 };
 use mitra_validators::{
     errors::ValidationError,
 };
 
-use crate::{
-    errors::HttpError,
-};
-
-#[derive(Debug, Error)]
-pub enum EndpointError {
-    #[error(transparent)]
-    ValidationError(#[from] ValidationError),
-
-    #[error(transparent)]
-    DatabaseError(#[from] DatabaseError),
-
-    #[error("{0}")]
-    AuthError(#[source] AuthenticationError),
-}
-
-impl From<AuthenticationError> for EndpointError {
-    fn from(error: AuthenticationError) -> Self {
-        match error {
-            AuthenticationError::ValidationError(inner) => inner.into(),
-            AuthenticationError::DatabaseError(inner) => inner.into(),
-            _ => Self::AuthError(error),
-        }
-    }
-}
-
-impl From<EndpointError> for HttpError {
-    fn from(error: EndpointError) -> Self {
-        match error {
-            EndpointError::ValidationError(error) => error.into(),
-            EndpointError::DatabaseError(error) => error.into(),
-            EndpointError::AuthError(_) => {
-                HttpError::AuthError("invalid signature")
-            },
-        }
-    }
-}
+use super::errors::EndpointError;
 
 pub async fn receive_activity(
     config: &Config,
@@ -97,7 +59,7 @@ pub async fn receive_activity(
     let filter = &ap_client.filter;
     if let Ok(possible_actor_hostname) = get_hostname(&activity_actor) {
         // This only works for HTTP URIs
-        if filter.is_incoming_blocked(&possible_actor_hostname) {
+        if filter.is_incoming_blocked(&possible_actor_hostname.to_string()) {
             log::info!("ignoring activity from blocked instance {possible_actor_hostname}");
             return Ok(());
         };
@@ -147,7 +109,6 @@ pub async fn receive_activity(
                 // or if signer is not found in local database
                 return Ok(());
             };
-            log::warn!("invalid HTTP signature: {}", error);
             return Err(error.into());
         },
     };
@@ -179,7 +140,6 @@ pub async fn receive_activity(
         },
         Err(AuthenticationError::NoJsonSignature) => (), // ignore
         Err(other_error) => {
-            log::warn!("invalid JSON signature: {}", other_error);
             return Err(other_error.into());
         },
     };

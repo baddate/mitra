@@ -2,19 +2,20 @@ use serde::Serialize;
 
 use mitra_config::Instance;
 use mitra_models::{
+    accounts::types::User,
     database::DatabaseError,
     profiles::types::{DbActor, DbActorProfile},
-    users::types::User,
 };
 use mitra_utils::id::generate_ulid;
 
 use crate::{
+    authority::Authority,
     contexts::{build_default_context, Context},
     deliverer::Recipient,
     identifiers::{
         compatible_id,
-        local_activity_id,
-        local_actor_id,
+        local_activity_id_unified,
+        local_actor_id_unified,
     },
     queues::OutgoingActivityJobData,
     vocabulary::ACCEPT,
@@ -23,7 +24,7 @@ use crate::{
 #[derive(Serialize)]
 struct AcceptFollow {
     #[serde(rename = "@context")]
-    context: Context,
+    _context: Context,
 
     #[serde(rename = "type")]
     activity_type: String,
@@ -36,16 +37,20 @@ struct AcceptFollow {
 }
 
 fn build_accept_follow(
-    instance_uri: &str,
+    authority: &Authority,
     actor_profile: &DbActorProfile,
     source_actor_id: &str,
     follow_activity_id: &str,
 ) -> AcceptFollow {
     // Accept(Follow) is idempotent so its ID can be random
-    let activity_id = local_activity_id(instance_uri, ACCEPT, generate_ulid());
-    let actor_id = local_actor_id(instance_uri, &actor_profile.username);
+    let activity_id = local_activity_id_unified(authority, ACCEPT, generate_ulid());
+    let actor_id = local_actor_id_unified(
+        authority,
+        actor_profile.id,
+        &actor_profile.username,
+    );
     AcceptFollow {
-        context: build_default_context(),
+        _context: build_default_context(),
         activity_type: ACCEPT.to_string(),
         id: activity_id,
         actor: actor_id,
@@ -60,13 +65,14 @@ pub fn prepare_accept_follow(
     source_actor: &DbActor,
     follow_activity_id: &str,
 ) -> Result<OutgoingActivityJobData, DatabaseError> {
+    let authority = Authority::from(instance);
     let source_actor_id = compatible_id(source_actor, &source_actor.id)?;
     let follow_activity_id = compatible_id(
         source_actor,
         follow_activity_id,
     )?;
     let activity = build_accept_follow(
-        instance.uri_str(),
+        &authority,
         &sender.profile,
         &source_actor_id,
         &follow_activity_id,
@@ -88,11 +94,12 @@ mod tests {
 
     #[test]
     fn test_build_accept_follow() {
+        let authority = Authority::server_unchecked(INSTANCE_URI);
         let target = DbActorProfile::local_for_test("user");
         let follow_activity_id = "https://remote.example/objects/999";
         let follower_id = "https://remote.example/users/123";
         let activity = build_accept_follow(
-            INSTANCE_URI,
+            &authority,
             &target,
             follower_id,
             follow_activity_id,

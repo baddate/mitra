@@ -88,7 +88,7 @@ pub async fn save_attributed_object(
 
 pub async fn get_object(
     db_client: &impl DatabaseClient,
-    object_id: &str,
+    object_id: &CanonicalUri,
 ) -> Result<JsonValue, DatabaseError> {
     let maybe_row = db_client.query_opt(
         "
@@ -96,7 +96,7 @@ pub async fn get_object(
         FROM activitypub_object
         WHERE object_id = $1
         ",
-        &[&object_id],
+        &[&object_id.to_string()],
     ).await?;
     let row = maybe_row.ok_or(DatabaseError::NotFound("activitypub object"))?;
     let object_data = row.try_get("object_data")?;
@@ -455,10 +455,10 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use crate::{
+        accounts::test_utils::create_test_portable_user,
         database::test_utils::create_test_database,
         posts::test_utils::create_test_remote_post,
         profiles::test_utils::create_test_remote_profile,
-        users::test_utils::create_test_portable_user,
     };
     use super::*;
 

@@ -25,7 +25,10 @@ use apx_core::{
         http_url_whatwg::get_hostname,
     },
 };
-use apx_sdk::deliver::{send_object, DelivererError};
+use apx_sdk::{
+    agent::FederationAgent,
+    deliver::{send_object, DelivererError},
+};
 use futures::{
     stream::FuturesUnordered,
     StreamExt,
@@ -42,8 +45,8 @@ use serde_json::{Value as JsonValue};
 
 use mitra_config::Instance;
 use mitra_models::{
+    accounts::types::{PortableUser, User},
     profiles::types::{DbActor, PublicKeyType},
-    users::types::{PortableUser, User},
 };
 
 use crate::{
@@ -172,6 +175,14 @@ impl Sender {
         };
         Some(sender)
     }
+
+    pub fn into_agent(self, instance: &Instance) -> FederationAgent {
+        build_federation_agent_with_key(
+            instance,
+            self.rsa_secret_key,
+            self.rsa_key_id,
+        )
+    }
 }
 
 /// Represents delivery to a single inbox
@@ -180,7 +191,7 @@ pub struct Recipient {
     // Canonical actor ID
     pub id: String,
     // HTTP URI of inbox/outbox endpoint
-    pub(super) inbox: String,
+    pub inbox: String,
 
     #[serde(default)]
     pub is_primary: bool,
@@ -273,8 +284,6 @@ pub(super) async fn deliver_activity_worker(
     recipients: &mut [Recipient],
 ) -> Result<(), DelivererError> {
     assert!(instance.federation.enabled);
-    let rsa_secret_key = sender.rsa_secret_key;
-    let rsa_key_id = sender.rsa_key_id;
 
     let mut deliveries = vec![];
     let mut sent = vec![];
@@ -283,15 +292,11 @@ pub(super) async fn deliver_activity_worker(
         if recipient.is_finished() {
             continue;
         };
-        let hostname = get_hostname(&recipient.inbox)?;
+        let hostname = get_hostname(&recipient.inbox)?.to_string();
         deliveries.push((index, hostname, recipient.inbox.clone()));
     };
 
-    let agent = build_federation_agent_with_key(
-        &instance,
-        rsa_secret_key,
-        rsa_key_id,
-    );
+    let agent = sender.into_agent(&instance);
     let mut delivery_pool = FuturesUnordered::new();
     let mut delivery_pool_state: HashMap<usize, &String> = HashMap::new();
 
@@ -315,7 +320,7 @@ pub(super) async fn deliver_activity_worker(
                 .any(|current_hostname| is_onion(current_hostname))
             {
                 // Don't deliver to more than one onion at a time.
-                // Simultanous requests frequently fail.
+                // Simultaneous requests frequently fail.
                 continue;
             };
             // Deliver activities concurrently

@@ -3,8 +3,8 @@ use apx_sdk::agent::{FederationAgent, HttpSigner};
 
 use mitra_config::Instance;
 use mitra_models::{
+    accounts::types::User,
     profiles::types::PublicKeyType,
-    users::types::User,
 };
 
 use super::{
@@ -40,6 +40,7 @@ pub(super) fn build_federation_agent_with_key(
         proxy_url: instance.federation.proxy_url.clone(),
         onion_proxy_url: instance.federation.onion_proxy_url.clone(),
         i2p_proxy_url: instance.federation.i2p_proxy_url.clone(),
+        no_proxy: instance.federation.no_proxy.clone(),
         signer: maybe_signer,
         rfc9421_enabled: false,
     }

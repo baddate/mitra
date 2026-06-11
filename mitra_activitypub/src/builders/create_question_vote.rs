@@ -3,10 +3,10 @@ use serde_json::{Value as JsonValue};
 
 use mitra_config::Instance;
 use mitra_models::{
+    accounts::types::User,
     database::DatabaseError,
     polls::types::PollVote,
     profiles::types::{DbActor, DbActorProfile},
-    users::types::User,
 };
 use mitra_utils::id::generate_ulid;
 
@@ -38,7 +38,7 @@ struct Note {
 #[derive(Serialize)]
 struct CreateNote {
     #[serde(rename = "@context")]
-    context: Context,
+    _context: Context,
 
     #[serde(rename = "type")]
     activity_type: String,
@@ -77,7 +77,7 @@ fn build_create_question_vote(
         _ => serde_json::to_value(notes),
     }.expect("note should be serializable");
     CreateNote {
-        context: build_default_context(),
+        _context: build_default_context(),
         activity_type: CREATE.to_string(),
         id: activity_id,
         actor: actor_id,

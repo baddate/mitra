@@ -3,12 +3,12 @@ use uuid::Uuid;
 
 use mitra_config::Instance;
 use mitra_models::{
+    accounts::types::User,
     database::{DatabaseClient, DatabaseError},
     emojis::types::{CustomEmoji as DbCustomEmoji},
     posts::types::{PostDetailed, Visibility},
     profiles::types::DbActorProfile,
     reactions::types::ReactionDetailed,
-    users::types::User,
 };
 use mitra_services::media::MediaServer;
 
@@ -30,9 +30,9 @@ use crate::{
 use super::emoji::{build_emoji, Emoji};
 
 #[derive(Serialize)]
-struct Like {
+pub struct Like {
     #[serde(rename = "@context")]
-    context: Context,
+    _context: Context,
 
     #[serde(rename = "type")]
     activity_type: String,
@@ -72,7 +72,7 @@ pub(super) fn get_like_audience(
     (primary_audience, secondary_audience)
 }
 
-fn build_like(
+pub fn build_like(
     authority: &Authority,
     media_server: &MediaServer,
     actor_profile: &DbActorProfile,
@@ -101,7 +101,7 @@ fn build_like(
     let (primary_audience, secondary_audience) =
         get_like_audience(&post_author_id, post.visibility);
     Like {
-        context: build_default_context(),
+        _context: build_default_context(),
         activity_type: activity_type.to_string(),
         id: activity_id,
         actor: actor_id,

@@ -20,6 +20,7 @@ use actix_web::{
     HttpResponse,
     Scope,
 };
+use actix_web_httpauth::extractors::bearer::BearerAuth;
 use apx_core::{
     caip2::ChainId,
     hashlink::Hashlink,
@@ -27,6 +28,7 @@ use apx_core::{
     http_types::{header_map_adapter, method_adapter, uri_adapter},
     url::{
         ap_uri::with_ap_prefix,
+        canonical::CanonicalUri,
         common::url_decode,
         http_uri::HttpUri,
     },
@@ -57,13 +59,18 @@ use mitra_activitypub::{
         note::build_note,
         proposal::build_proposal,
     },
-    errors::HandlerError,
-    forwarder::{
-        get_activity_recipients,
+    c2s::authorization::{
+        verify_activity_actor,
+        verify_activity_id,
         verify_embedded_ownership,
+        verify_permissions,
         verify_public_keys,
     },
-    handlers::activity::get_activity_audience,
+    forwarder::get_activity_recipients,
+    handlers::activity::{
+        get_activity_audience,
+        handle_activity_c2s,
+    },
     identifiers::{
         canonicalize_id,
         compatible_post_object_id,
@@ -84,6 +91,15 @@ use mitra_activitypub::{
 };
 use mitra_config::Config;
 use mitra_models::{
+    accounts::{
+        queries::{
+            get_portable_user_by_id,
+            get_portable_user_by_inbox_id,
+            get_portable_user_by_outbox_id,
+            get_user_by_name,
+        },
+        types::Role,
+    },
     activitypub::{
         helpers::get_collection_items_json,
         queries::{
@@ -102,6 +118,7 @@ use mitra_models::{
         DatabaseError,
     },
     emojis::queries::get_local_emoji_by_name,
+    oauth::queries::get_user_by_oauth_token,
     posts::helpers::{
         add_related_posts,
         get_post_by_id_for_view,
@@ -115,14 +132,9 @@ use mitra_models::{
         queries::get_remote_profile_by_actor_id,
         types::PaymentOption,
     },
-    users::queries::{
-        get_portable_user_by_id,
-        get_portable_user_by_inbox_id,
-        get_portable_user_by_outbox_id,
-        get_user_by_name,
-    },
 };
 use mitra_services::media::{MediaServer, MediaStorage};
+use mitra_utils::files::APPLICATION_OCTET_STREAM;
 use mitra_validators::errors::ValidationError;
 
 use crate::{
@@ -142,10 +154,8 @@ use super::{
         check_request,
         check_request_opt,
     },
-    receiver::{
-        receive_activity,
-        EndpointError,
-    },
+    errors::EndpointError,
+    receiver::receive_activity,
     types::{
         CollectionQueryParams,
         GatewayMetadata,
@@ -265,11 +275,13 @@ async fn outbox(
     let collection_id = LocalActorCollection::Outbox.of(&actor_id);
     let first_page_id = format!("{}?page=true", collection_id);
     if query_params.page.is_none() {
-        let collection = OrderedCollection::new(
-            collection_id,
-            Some(first_page_id),
-            None,
-        );
+        let collection =
+            OrderedCollection::new(
+                collection_id,
+                Some(first_page_id),
+                None,
+            )
+            .with_attributed_to(&actor_id);
         let response = HttpResponse::Ok()
             .content_type(AP_MEDIA_TYPE)
             .json(collection);
@@ -297,7 +309,7 @@ async fn outbox(
                 .expect("activity should be serializable")
         } else {
             let activity = build_create_note(
-                instance.uri(),
+                &authority,
                 &instance.webfinger_hostname(),
                 &media_server,
                 post,
@@ -306,10 +318,12 @@ async fn outbox(
                 .expect("activity should be serializable")
         }
     }).collect();
-    let collection_page = OrderedCollection::new_page(
-        first_page_id,
-        activities,
-    );
+    let collection_page =
+        OrderedCollection::new_page(
+            first_page_id,
+            activities,
+        )
+        .with_attributed_to(&actor_id);
     let response = HttpResponse::Ok()
         .content_type(AP_MEDIA_TYPE)
         .json(collection_page);
@@ -317,8 +331,38 @@ async fn outbox(
 }
 
 #[post("/outbox")]
-async fn outbox_client_to_server() -> HttpResponse {
-    HttpResponse::MethodNotAllowed().finish()
+async fn outbox_client_to_server(
+    auth: BearerAuth,
+    config: web::Data<Config>,
+    db_pool: web::Data<DatabaseConnectionPool>,
+    activity: web::Json<JsonValue>,
+) -> Result<HttpResponse, HttpError> {
+    if !config.federation.activitypub_c2s_enabled {
+        return Ok(HttpResponse::MethodNotAllowed().finish());
+    };
+    let (_, account) = get_user_by_oauth_token(
+        db_client_await!(&db_pool),
+        auth.token(),
+    ).await?;
+    // WARNING: C2S API is unsafe
+    // Only admins are allowed to use the outbox
+    if account.role != Role::Admin {
+        return Err(HttpError::PermissionError);
+    };
+    let instance = config.instance();
+    // TODO: remove @context
+    verify_activity_id(&instance, &activity)?;
+    verify_activity_actor(&instance, &account, &activity)?;
+    verify_public_keys(&instance, None, &activity)?;
+    verify_embedded_ownership(&activity)?;
+    verify_permissions(db_client_await!(&db_pool), &activity).await?;
+    let ap_client = ApClient::new_with_pool(&config, &db_pool).await?;
+    handle_activity_c2s(
+        &ap_client,
+        &db_pool,
+        &activity,
+    ).await?;
+    Ok(HttpResponse::Accepted().finish())
 }
 
 #[get("/followers")]
@@ -404,25 +448,12 @@ async fn featured_collection(
     config: web::Data<Config>,
     db_pool: web::Data<DatabaseConnectionPool>,
     username: web::Path<String>,
-    query_params: web::Query<CollectionQueryParams>,
 ) -> Result<HttpResponse, HttpError> {
     let db_client = &**get_database_client(&db_pool).await?;
     let user = get_user_by_name(db_client, &username).await?;
     let instance = config.instance();
     let actor_id = local_actor_id(instance.uri_str(), &username);
     let collection_id = LocalActorCollection::Featured.of(&actor_id);
-    let first_page_id = format!("{}?page=true", collection_id);
-    if query_params.page.is_none() {
-        let collection = OrderedCollection::new(
-            collection_id,
-            Some(first_page_id),
-            None,
-        );
-        let response = HttpResponse::Ok()
-            .content_type(AP_MEDIA_TYPE)
-            .json(collection);
-        return Ok(response);
-    };
     let mut posts = get_posts_by_author(
         db_client,
         user.id,
@@ -439,7 +470,6 @@ async fn featured_collection(
     let media_server = MediaServer::new(&config);
     let objects = posts.iter().map(|post| {
         let note = build_note(
-            instance.uri(),
             &instance.webfinger_hostname(),
             &authority,
             &media_server,
@@ -449,13 +479,12 @@ async fn featured_collection(
         serde_json::to_value(note)
             .expect("note should be serializable")
     }).collect();
-    let collection_page = OrderedCollection::new_page(
-        first_page_id,
-        objects,
-    );
+    let collection =
+        OrderedCollection::new_with_items(collection_id, objects)
+            .with_attributed_to(&actor_id);
     let response = HttpResponse::Ok()
         .content_type(AP_MEDIA_TYPE)
-        .json(collection_page);
+        .json(collection);
     Ok(response)
 }
 
@@ -576,7 +605,6 @@ pub async fn object_view(
     let authority = Authority::from(&instance);
     let media_server = MediaServer::new(&config);
     let object = build_note(
-        instance.uri(),
         &instance.webfinger_hostname(),
         &authority,
         &media_server,
@@ -694,7 +722,7 @@ pub async fn conversation_view(
     let instance = config.instance();
     let authority = Authority::from(&instance);
     let collection_id =
-        local_conversation_collection(instance.uri_str(), *conversation_id);
+        local_conversation_collection(&authority, *conversation_id);
     let first_page_id = format!("{}?page=true", collection_id);
     if query_params.page.is_none() {
         let collection = OrderedCollection::new(
@@ -732,9 +760,12 @@ pub async fn activity_view(
     request: HttpRequest,
 ) -> Result<HttpResponse, HttpError> {
     let request_full_uri = get_request_full_uri(&connection_info, request.uri());
+    let canonical_activity_id =
+        CanonicalUri::parse_canonical(&request_full_uri.to_string())
+            .map_err(|_| ValidationError("invalid activity ID"))?;
     let activity = get_object(
         db_client_await!(&db_pool),
-        &request_full_uri.to_string(),
+        &canonical_activity_id,
     ).await?;
     let audience = get_activity_audience(&activity, None)?;
     if !audience.iter().any(|id| id.to_string() == AP_PUBLIC) {
@@ -791,19 +822,14 @@ async fn apgateway_create_actor_view(
         &actor,
     )?;
     verify_embedded_ownership(&actor)?;
+    verify_permissions(db_client_await!(&db_pool), &actor).await?;
     let (user, created) = register_portable_actor(
         &config,
         &db_pool,
         actor.into_inner(),
         maybe_invite_code,
-    ).await.map_err(|error| {
+    ).await.inspect_err(|error| {
         log::warn!("failed to register portable actor ({error})");
-        match error {
-            HandlerError::ValidationError(error) =>
-                HttpError::ValidationError(error),
-            HandlerError::DatabaseError(error) => error.into(),
-            other_error => HttpError::from_internal(other_error),
-        }
     })?;
     let status_code = if created {
         log::warn!("created portable account {}", user);
@@ -1006,6 +1032,8 @@ async fn apgateway_outbox_push_view(
         &activity,
     )?;
     verify_embedded_ownership(&activity)?;
+    verify_permissions(db_client, &activity).await?;
+    // TODO: process activity immediately
     IncomingActivityJobData::new(
         &activity,
         None, // no inbox
@@ -1150,7 +1178,6 @@ async fn apgateway_media_upload_view(
     };
 
     let storage = MediaStorage::new(&config);
-    const APPLICATION_OCTET_STREAM: &str = "application/octet-stream";
     let media_type = request.headers()
         .get(http_header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())

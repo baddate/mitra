@@ -34,13 +34,19 @@ use apx_core::{
             VerificationMethod,
         },
     },
+    url::canonical::CanonicalUri,
 };
 use apx_sdk::{
     authentication::{
         verify_portable_object,
         AuthenticationError as PortableObjectAuthenticationError,
     },
-    utils::{key_id_to_actor_id, CoreType},
+    fetch::FetchedObject,
+    utils::{
+        get_core_type,
+        key_id_to_actor_id,
+        CoreType,
+    },
 };
 use serde_json::{Value as JsonValue};
 use thiserror::Error;
@@ -71,20 +77,23 @@ const AUTHENTICATION_FETCHER_TIMEOUT: u64 = 10;
 
 #[derive(Debug, Error)]
 pub enum AuthenticationError {
-    #[error(transparent)]
+    #[error("invalid HTTP signature: {0}")]
     HttpSignatureError(#[from] HttpSignatureError),
 
     #[error("no HTTP signature")]
     NoHttpSignature,
 
-    #[error(transparent)]
+    #[error("unexpected target authority: {0}")]
+    UnexpectedTargetAuthority(String),
+
+    #[error("invalid JSON signature: {0}")]
     JsonSignatureError(#[from] JsonSignatureError),
 
     #[error("no JSON signature")]
     NoJsonSignature,
 
     #[error("invalid JSON signature type")]
-    InvalidJsonSignatureType,
+    UnsupportedSignatureAlgorithm,
 
     #[error("unsupported verification method")]
     UnsupportedVerificationMethod,
@@ -101,8 +110,12 @@ pub enum AuthenticationError {
     #[error("{0}")]
     ImportError(String),
 
-    #[error("{0}")]
-    ActorError(&'static str),
+    #[error("key not found in cache: {0}")]
+    KeyNotFound(CanonicalUri),
+
+    // Not used with HTTP signatures because APx doesn't return sig algorithm
+    #[error("unexpected key type")]
+    UnexpectedKeyType,
 
     #[error("invalid RSA public key")]
     InvalidRsaPublicKey(#[from] RsaSerializationError),
@@ -192,11 +205,12 @@ fn get_signer_key(
     } else {
         // TODO: remove public_key from actor data
         log::warn!("key not found in public_keys: {}", canonical_key_id);
+        #[expect(deprecated)]
         let public_key = &profile.actor_json.as_ref()
             .expect("should be signed by remote actor")
             .public_key.as_ref()
             .filter(|public_key| public_key.id == key_id)
-            .ok_or(AuthenticationError::ActorError("key not found"))?;
+            .ok_or(AuthenticationError::KeyNotFound(canonical_key_id))?;
         let public_key =
             deserialize_rsa_public_key(&public_key.public_key_pem)?;
         PublicKey::Rsa(public_key)
@@ -210,7 +224,7 @@ fn get_signer_ed25519_key(
 ) -> Result<Ed25519PublicKey, AuthenticationError> {
     let public_key = get_signer_key(profile, key_id)?;
     let PublicKey::Ed25519(ed25519_public_key) = public_key else {
-        return Err(AuthenticationError::ActorError("unexpected key type"));
+        return Err(AuthenticationError::UnexpectedKeyType);
     };
     Ok(ed25519_public_key)
 }
@@ -238,6 +252,11 @@ pub async fn verify_signed_request(
     };
     if signature_data.is_rfc9421 {
         log::info!("RFC-9421 signature found");
+    };
+    if signature_data.authority != ap_client.instance.uri().authority() {
+        return Err(AuthenticationError::UnexpectedTargetAuthority(
+            signature_data.authority,
+        ));
     };
     // Try to guess the key owner ID from the key ID.
     let signer_id = match signature_data.key_id {
@@ -316,7 +335,7 @@ pub async fn verify_signed_object(
                 .map_err(|_| ValidationError("invalid key ID"))?;
             let signer = get_signer(ap_client, db_pool, &signer_id, no_fetch).await?;
             match signature_data.proof_type {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 ProofType::JcsEddsaSignature | ProofType::EddsaJcsSignature => {
                     // Check reciprocal claim
                     let signer_key = get_signer_ed25519_key(
@@ -330,7 +349,7 @@ pub async fn verify_signed_object(
                         &signature_data.signature,
                     )?;
                 },
-                _ => return Err(AuthenticationError::InvalidJsonSignatureType),
+                _ => return Err(AuthenticationError::UnsupportedSignatureAlgorithm),
             };
             signer
         },
@@ -349,4 +368,35 @@ pub async fn verify_signed_object(
         return Err(AuthenticationError::UnexpectedObjectSigner);
     };
     Ok(signer)
+}
+
+// Unlike verify_fetched_object from APx,
+// this verifier supports non-portable signed objects
+pub async fn verify_signed_fetched_object(
+    ap_client: &ApClient,
+    db_pool: &DatabaseConnectionPool,
+    object: &FetchedObject,
+) -> Result<(), HandlerError> {
+    let Err(fetch_error) = object.verify_origin() else {
+        return Ok(());
+    };
+    let core_type = get_core_type(&object.value);
+    match verify_signed_object(
+        ap_client,
+        db_pool,
+        &object.value,
+        core_type,
+        true, // don't fetch
+    ).await {
+        Ok(_) => (),
+        Err(AuthenticationError::NoJsonSignature) =>
+            // Return origin verification error
+            return Err(fetch_error.into()),
+        Err(AuthenticationError::DatabaseError(db_error)) =>
+            return Err(db_error.into()),
+        Err(other_error) =>
+            // TODO: add AuthenticationError variant?
+            return Err(HandlerError::ValidationError(other_error.to_string())),
+    };
+    Ok(())
 }

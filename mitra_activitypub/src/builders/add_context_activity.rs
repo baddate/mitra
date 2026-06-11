@@ -5,20 +5,21 @@ use uuid::Uuid;
 
 use mitra_config::Instance;
 use mitra_models::{
+    accounts::{
+        queries::get_user_by_id,
+        types::User,
+    },
     conversations::types::Conversation,
     database::{DatabaseClient, DatabaseError},
     posts::{
         queries::get_post_by_id,
         types::{PostDetailed, Visibility},
     },
-    users::{
-        queries::get_user_by_id,
-        types::User,
-    },
 };
 use mitra_utils::id::generate_ulid;
 
 use crate::{
+    authority::Authority,
     contexts::{build_default_context, Context},
     identifiers::{
         local_activity_id,
@@ -43,7 +44,7 @@ struct Target {
 #[derive(Serialize)]
 struct AddContextActivity {
     #[serde(rename = "@context")]
-    context: Context,
+    _context: Context,
 
     #[serde(rename = "type")]
     activity_type: String,
@@ -63,14 +64,15 @@ fn build_add_context_activity(
     conversation_audience: &str,
     activity: JsonValue,
 ) -> AddContextActivity {
+    let authority = Authority::server_unchecked(instance_uri);
     let actor_id = local_actor_id(instance_uri, sender_username);
     let activity_id = local_activity_id(instance_uri, ADD, generate_ulid());
     let target_id = local_conversation_history_collection(
-        instance_uri,
+        &authority,
         conversation_id,
     );
     AddContextActivity {
-        context: build_default_context(),
+        _context: build_default_context(),
         activity_type: ADD.to_string(),
         actor: actor_id.clone(),
         id: activity_id,

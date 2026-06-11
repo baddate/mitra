@@ -1,6 +1,5 @@
 use apx_core::url::{
-    http_uri::Hostname,
-    http_url_whatwg::get_hostname,
+    http_uri::{HttpUri, Hostname},
 };
 use apx_sdk::fetch::fetch_media;
 use chrono::{DateTime, Utc};
@@ -17,7 +16,7 @@ use mitra_models::{
     emojis::queries::{
         create_or_update_remote_emoji,
         get_remote_emoji_by_object_id,
-        update_emoji,
+        update_remote_emoji,
     },
     emojis::types::{CustomEmoji as DbCustomEmoji},
     filter_rules::types::FilterAction,
@@ -89,9 +88,10 @@ pub async fn handle_emoji(
     if let Some(alternate_name) = emoji.alternate_name {
         log::warn!("alternate name for {emoji_name}:  {alternate_name}");
     };
-    let emoji_hostname = match get_hostname(&emoji_object_id)
+    let emoji_hostname = match HttpUri::parse(&emoji_object_id)
+        .map(|http_uri| http_uri.hostname())
         .map_err(|_| ValidationError("invalid emoji ID"))
-        .and_then(|value| validate_hostname(&value).map(|()| value))
+        .and_then(|value| validate_hostname(value.as_str()).map(|()| value))
     {
         Ok(hostname) => hostname,
         Err(error) => {
@@ -156,7 +156,7 @@ pub async fn handle_emoji(
     };
     let db_client = &mut **get_database_client(db_pool).await?;
     let db_emoji = if let Some(emoji_id) = maybe_emoji_id {
-        let (db_emoji, deletion_queue) = update_emoji(
+        let (db_emoji, deletion_queue) = update_remote_emoji(
             db_client,
             emoji_id,
             image,
@@ -169,7 +169,7 @@ pub async fn handle_emoji(
         let (db_emoji, deletion_queue) = create_or_update_remote_emoji(
             db_client,
             emoji_name,
-            &emoji_hostname,
+            emoji_hostname.as_str(),
             image,
             &emoji_object_id,
             emoji.updated,

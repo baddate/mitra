@@ -16,7 +16,7 @@ use mitra_config::{
     RegistrationType,
     SoftwareMetadata,
 };
-use mitra_models::users::types::User;
+use mitra_models::accounts::types::User;
 use mitra_utils::markdown::markdown_to_html;
 use mitra_validators::{
     polls::{POLL_OPTION_COUNT_MAX, POLL_OPTION_NAME_LENGTH_MAX},
@@ -280,7 +280,6 @@ fn get_full_api_version(software: SoftwareMetadata) -> String {
 }
 
 impl InstanceInfo {
-    #[allow(clippy::too_many_arguments)]
     pub fn create(
         config: &Config,
         dynamic_config: DynamicConfig,
@@ -410,6 +409,8 @@ pub struct InstanceInfoV2 {
     authentication_methods: Vec<String>,
     login_message: String,
     new_accounts_read_only: bool,
+    like_emoji: String,
+    favorite_emojis: Vec<String>,
     blockchains: Vec<BlockchainInfo>,
     ipfs_gateway_url: Option<String>,
 
@@ -495,6 +496,8 @@ impl InstanceInfoV2 {
             login_message: config.login_message.clone(),
             new_accounts_read_only:
                 matches!(config.registration.default_role, DefaultRole::ReadOnlyUser),
+            like_emoji: dynamic_config.like_emoji,
+            favorite_emojis: dynamic_config.favorite_emojis,
             blockchains: config.blockchains().iter()
                 .map(BlockchainInfo::from)
                 .collect(),

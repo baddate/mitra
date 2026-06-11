@@ -16,7 +16,7 @@ use mitra_models::{
     profiles::types::DbActorProfile,
 };
 
-use super::receiver::EndpointError;
+use super::errors::EndpointError;
 
 pub async fn check_request(
     ap_client: &ApClient,
@@ -35,7 +35,11 @@ pub async fn check_request(
     ).await {
         Ok((_, signer)) => signer,
         Err(error) => {
-            log::warn!("request verification error: {error}");
+            log::warn!(
+                "request verification error ({}): {}",
+                request_full_uri,
+                error,
+            );
             // Will be converted into HttpError
             return Err(error.into());
         },

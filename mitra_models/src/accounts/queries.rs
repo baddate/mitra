@@ -394,7 +394,7 @@ pub async fn get_user_by_did(
     Ok(user)
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 async fn get_user_by_identity_key(
     db_client: &impl DatabaseClient,
     identity_key: &str,
@@ -769,6 +769,10 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use crate::{
+        accounts::{
+            test_utils::{create_test_user, create_test_portable_user},
+            types::Role,
+        },
         database::test_utils::create_test_database,
         posts::types::Visibility,
         profiles::{
@@ -778,10 +782,6 @@ mod tests {
                 DbActorKey,
                 WebfingerHostname,
             },
-        },
-        users::{
-            test_utils::{create_test_user, create_test_portable_user},
-            types::Role,
         },
     };
     use super::*;

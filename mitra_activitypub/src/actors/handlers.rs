@@ -3,7 +3,6 @@ use apx_core::{
         canonical::CanonicalUri,
         common::Origin,
         http_uri::{Hostname, HttpUri},
-        http_url_whatwg::get_hostname,
     },
 };
 use apx_sdk::{
@@ -86,8 +85,8 @@ use crate::{
         VERIFIABLE_IDENTITY_STATEMENT,
     },
     webfinger::{
+        perform_reverse_webfinger_query,
         perform_webfinger_query,
-        peform_reverse_webfinger_query,
     },
 };
 
@@ -263,6 +262,7 @@ impl ValidatedActor {
             featured: maybe_canonical_featured.map(|id| id.to_string()),
             url: self.url.clone(),
             gateways: self.gateways.clone(),
+            #[expect(deprecated)]
             public_key: None,
         };
         Ok(db_actor)
@@ -281,7 +281,7 @@ async fn get_webfinger_hostname(
     let (server_hostname, webfinger_hostname) = match canonical_actor_id {
         CanonicalUri::Http(http_uri) => {
             let server_hostname = http_uri.hostname().to_string();
-            let webfinger_hostname = match peform_reverse_webfinger_query(
+            let webfinger_hostname = match perform_reverse_webfinger_query(
                 agent,
                 &actor.preferred_username,
                 &http_uri,
@@ -301,9 +301,10 @@ async fn get_webfinger_hostname(
         CanonicalUri::Ap(_) => {
             if let Some(gateway) = actor.gateways.first() {
                 // Primary gateway
-                let gateway_hostname = get_hostname(gateway)
+                let gateway_hostname = HttpUri::parse(gateway)
+                    .map(|http_uri| http_uri.hostname())
                     .map_err(|_| ValidationError("invalid gateway URL"))?;
-                if gateway_hostname == instance_uri.hostname().as_str() {
+                if gateway_hostname == instance_uri.hostname() {
                     // Portable actor with local account (unmanaged)
                     if has_portable_account {
                         return Ok((None, WebfingerHostname::Local));
@@ -314,7 +315,7 @@ async fn get_webfinger_hostname(
                 };
                 let webfinger_address = WebfingerAddress::new_unchecked(
                     &actor.preferred_username,
-                    &gateway_hostname,
+                    gateway_hostname.as_str(),
                 );
                 let webfinger_actor_id = perform_webfinger_query(
                     agent,
@@ -324,7 +325,10 @@ async fn get_webfinger_hostname(
                     .map_err(|_| ValidationError("invalid actor ID in JRD"))?;
                 if canonical_webfinger_actor_id == canonical_actor_id {
                     // Actor is hosted by this gateway
-                    (Some(gateway_hostname.clone()), WebfingerHostname::Remote(gateway_hostname))
+                    (
+                        Some(gateway_hostname.to_string()),
+                        WebfingerHostname::Remote(gateway_hostname.to_string()),
+                    )
                 } else {
                     return Err(ValidationError("unexpected actor ID in JRD").into());
                 }
@@ -439,8 +443,9 @@ fn parse_public_keys(
         } else if !is_same_origin(&public_key.id, &public_key.owner)? {
             // Not supported (the key must be fetched from its origin)
             log::warn!("key and key owner have different origins");
-        } else {
-            let db_key = public_key.to_db_key()?;
+        } else if let Ok(db_key) = public_key.to_db_key()
+            .inspect_err(|error| log::warn!("{error}"))
+        {
             keys.push(db_key);
         };
     };
@@ -454,19 +459,16 @@ fn parse_public_keys(
             log::warn!("key and key owner have different origins");
             continue;
         };
-        let db_key = multikey.to_db_key()?;
-        keys.push(db_key);
+        if let Ok(db_key) = multikey.to_db_key()
+            .inspect_err(|error| log::warn!("{error}"))
+        {
+            keys.push(db_key);
+        };
     };
     keys.sort_by_key(|item| item.id.clone());
     keys.dedup_by_key(|item| item.id.clone());
     if keys.is_empty() {
-        let canonical_actor_id = CanonicalUri::parse(&actor.id)
-            .map_err(|_| ValidationError("invalid actor ID"))?;
-        if matches!(canonical_actor_id, CanonicalUri::Ap(_)) {
-            log::warn!("public keys are not found in portable actor object");
-        } else {
-            return Err(ValidationError("public keys not found"));
-        };
+        log::warn!("public keys are not found in the actor document");
     };
     Ok(keys)
 }
@@ -879,14 +881,22 @@ mod tests {
         let ed25519_secret_key = generate_ed25519_key();
         let actor_public_key =
             PublicKeyPem::build(actor_id, &rsa_secret_key).unwrap();
-        let actor_auth_key_1 =
+        let actor_multikey_1 =
             Multikey::build_rsa(actor_id, &rsa_secret_key).unwrap();
-        let actor_auth_key_2 =
+        let actor_multikey_2 =
             Multikey::build_ed25519(actor_id, &ed25519_secret_key);
+        let actor_multikey_3 = Multikey::build_ed25519(
+            "https://test.example/users/2",
+            &ed25519_secret_key,
+        );
         let actor = ValidatedActor {
             id: actor_id.to_string(),
             public_key: Some(actor_public_key),
-            assertion_method: vec![actor_auth_key_1, actor_auth_key_2],
+            assertion_method: vec![
+                actor_multikey_1,
+                actor_multikey_2,
+                actor_multikey_3,
+            ],
             ..Default::default()
         };
         let public_keys = parse_public_keys(&actor).unwrap();

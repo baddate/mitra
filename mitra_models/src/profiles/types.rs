@@ -609,6 +609,7 @@ pub struct DbActor {
     #[serde(default)]
     pub gateways: Vec<String>,
 
+    #[deprecated]
     pub public_key: Option<DbActorPublicKey>,
 }
 
@@ -634,7 +635,6 @@ impl DbActor {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone, FromSql)]
 #[postgres(name = "actor_profile")]
 pub struct DbActorProfile {
@@ -671,6 +671,7 @@ pub struct DbActorProfile {
     pub unreachable_since: Option<DateTime<Utc>>,
 
     // auto-generated database fields
+    #[allow(dead_code)]
     pub(crate) actor_id: Option<String>,
 }
 

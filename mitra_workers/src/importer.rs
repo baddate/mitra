@@ -12,12 +12,13 @@ use mitra_activitypub::{
     errors::HandlerError,
     importers::{
         is_actor_importer_error,
-        get_or_import_profile_by_webfinger_address,
+        get_or_import_actor_by_webfinger_address,
         ApClient,
     },
 };
 use mitra_config::Config;
 use mitra_models::{
+    accounts::queries::get_user_by_id,
     background_jobs::{
         queries::enqueue_job,
         types::JobType,
@@ -34,9 +35,6 @@ use mitra_models::{
         queries::get_remote_profile_by_actor_id,
     },
     relationships::queries::{follow, unfollow},
-    users::{
-        queries::get_user_by_id,
-    },
 };
 
 #[derive(Serialize, Deserialize)]
@@ -84,7 +82,7 @@ pub async fn import_follows_task(
     let ap_client = ApClient::new_with_pool(config, db_pool).await?;
     for webfinger_address in address_list {
         let webfinger_address: WebfingerAddress = webfinger_address.parse()?;
-        let profile = match get_or_import_profile_by_webfinger_address(
+        let profile = match get_or_import_actor_by_webfinger_address(
             &ap_client,
             db_pool,
             &webfinger_address,
@@ -138,7 +136,7 @@ pub async fn import_followers_task(
     let mut remote_followers = vec![];
     for follower_address in address_list {
         let follower_address: WebfingerAddress = follower_address.parse()?;
-        let follower = match get_or_import_profile_by_webfinger_address(
+        let follower = match get_or_import_actor_by_webfinger_address(
             &ap_client,
             db_pool,
             &follower_address,

@@ -6,17 +6,21 @@ use apx_core::{
         rsa::generate_rsa_key,
     },
     url::{
-        canonical::{parse_url, CanonicalUri},
+        canonical::{CanonicalUri, NonCanonicalUri},
         http_uri::HttpUri,
     },
 };
 use apx_sdk::{
     addresses::WebfingerAddress,
     agent::FederationAgent,
-    authentication::verify_portable_object,
+    authentication::{
+        verify_fetched_object,
+        verify_portable_object,
+    },
     deserialization::{deserialize_into_object_id_opt, object_to_id},
     fetch::{
         fetch_object,
+        FetchedObject,
         FetchError,
         FetchObjectOptions,
     },
@@ -31,6 +35,16 @@ use serde_json::{Value as JsonValue};
 
 use mitra_config::{Config, Instance, Limits, RegistrationType};
 use mitra_models::{
+    accounts::{
+        queries::{
+            create_portable_user,
+            get_portable_user_by_actor_id,
+            get_user_by_id,
+            get_user_by_name,
+            is_valid_invite_code,
+        },
+        types::{PortableUser, PortableUserData, User},
+    },
     database::{
         db_client_await,
         get_database_client,
@@ -52,14 +66,6 @@ use mitra_models::{
         get_remote_profile_by_actor_id,
     },
     profiles::types::{DbActor, DbActorProfile},
-    users::queries::{
-        create_portable_user,
-        get_portable_user_by_actor_id,
-        get_user_by_id,
-        get_user_by_name,
-        is_valid_invite_code,
-    },
-    users::types::{PortableUser, PortableUserData, User},
 };
 use mitra_services::media::MediaStorage;
 use mitra_validators::{
@@ -118,39 +124,28 @@ impl From<&DbActor> for FetcherContext {
 }
 
 impl FetcherContext {
-    fn prepare_object_id(&mut self, object_id: &str) -> Result<String, FetchError> {
-        let (canonical_object_id, maybe_gateway) = parse_url(object_id)
+    pub fn prepare_object_id(&mut self, object_id: &str) -> Result<String, FetchError> {
+        let mut object_id = NonCanonicalUri::parse(object_id)
             .map_err(|_| FetchError::UrlError)?;
-        if let Some(gateway) = maybe_gateway {
+        if let NonCanonicalUri::Ap((Some(ref gateway), _)) = object_id {
+            let gateway = gateway.to_string();
             if !self.gateways.contains(&gateway) {
                 self.gateways.insert(0, gateway);
             };
         };
-        // TODO: FEP-EF61: use random gateway
-        let maybe_gateway = self.gateways.first()
-            .map(|gateway| gateway.as_str());
-        // TODO: FEP-EF61: remove CanonicalUri::to_http_uri
-        let http_uri = canonical_object_id
-            .to_http_uri(maybe_gateway)
-            .ok_or(FetchError::NoGateway)?;
+        if let NonCanonicalUri::Ap((ref mut maybe_gateway, _)) = object_id {
+            // TODO: FEP-EF61: use random gateway
+            if let Some(gateway) = self.gateways.first() {
+                let gateway = HttpUri::parse(gateway.as_str())
+                    .map_err(|_| FetchError::UrlError)?;
+                maybe_gateway.replace(gateway);
+            } else {
+                return Err(FetchError::NoGateway);
+            };
+        };
+        let http_uri = object_id.to_string();
         Ok(http_uri)
     }
-}
-
-// Only used in fetch-object command
-pub async fn fetch_any_object_with_context(
-    agent: &FederationAgent,
-    context: &mut FetcherContext,
-    object_id: &str,
-    options: FetchObjectOptions,
-) -> Result<JsonValue, FetchError> {
-    let http_url = context.prepare_object_id(object_id)?;
-    let object_json = fetch_object(
-        agent,
-        &http_url,
-        options,
-    ).await?;
-    Ok(object_json)
 }
 
 #[derive(Clone)]
@@ -192,25 +187,21 @@ impl ApClient {
         )
     }
 
-    async fn _fetch_object<T: DeserializeOwned>(
+    pub async fn fetch_object_raw(
         &self,
         object_id: &str,
-    ) -> Result<T, HandlerError> {
+        options: FetchObjectOptions,
+    ) -> Result<FetchedObject, FetchError> {
         let agent = self.agent();
-        let object_json = fetch_object(
+        let object = fetch_object(
             &agent,
             object_id,
-            FetchObjectOptions::default(),
+            options,
         ).await?;
-        let object_id = get_object_id(&object_json)?;
-        if is_local_origin(&self.instance, object_id) {
-            return Err(HandlerError::LocalObject);
-        };
-        let object: T = serde_json::from_value(object_json)?;
         Ok(object)
     }
 
-    // Peforms filtering before fetching
+    // Performs filtering before fetching
     pub async fn fetch_object<T: DeserializeOwned>(
         &self,
         object_id: &str,
@@ -225,7 +216,20 @@ impl ApClient {
             let error_message = format!("request blocked: {}", object_id);
             return Err(HandlerError::Filtered(error_message));
         };
-        self._fetch_object(object_id).await
+        let options = FetchObjectOptions::default();
+        let object = self.fetch_object_raw(
+            object_id,
+            options,
+        ).await?;
+        let fep_ef61_trusted_origins = vec![];
+        verify_fetched_object(&object, fep_ef61_trusted_origins)?;
+        let object_json = object.extract_fragment()?;
+        let object_id = get_object_id(&object_json)?;
+        if is_local_origin(&self.instance, object_id) {
+            return Err(HandlerError::LocalObject);
+        };
+        let object: T = serde_json::from_value(object_json)?;
+        Ok(object)
     }
 }
 
@@ -269,7 +273,7 @@ pub async fn get_user_by_actor_id(
 }
 
 // Actor must be authenticated
-pub async fn import_profile(
+pub async fn import_actor(
     ap_client: &ApClient,
     db_pool: &DatabaseConnectionPool,
     actor: JsonValue,
@@ -425,7 +429,7 @@ impl ActorIdResolver {
             },
             Err(DatabaseError::NotFound(_)) => {
                 let actor: JsonValue = ap_client.fetch_object(actor_id).await?;
-                import_profile(ap_client, db_pool, actor).await?
+                import_actor(ap_client, db_pool, actor).await?
             },
             Err(other_error) => return Err(other_error.into()),
         };
@@ -444,7 +448,7 @@ pub fn is_actor_importer_error(error: &HandlerError) -> bool {
     )
 }
 
-pub async fn import_profile_by_webfinger_address(
+pub async fn import_actor_by_webfinger_address(
     ap_client: &ApClient,
     db_pool: &DatabaseConnectionPool,
     webfinger_address: &WebfingerAddress,
@@ -455,11 +459,11 @@ pub async fn import_profile_by_webfinger_address(
     let agent = ap_client.agent();
     let actor_id = perform_webfinger_query(&agent, webfinger_address).await?;
     let actor: JsonValue = ap_client.fetch_object(&actor_id).await?;
-    import_profile(ap_client, db_pool, actor).await
+    import_actor(ap_client, db_pool, actor).await
 }
 
 // Works with local profiles
-pub async fn get_or_import_profile_by_webfinger_address(
+pub async fn get_or_import_actor_by_webfinger_address(
     ap_client: &ApClient,
     db_pool: &DatabaseConnectionPool,
     webfinger_address: &WebfingerAddress,
@@ -487,7 +491,7 @@ pub async fn get_or_import_profile_by_webfinger_address(
             if webfinger_address.hostname() == instance.webfinger_hostname() {
                 return Err(db_error.into());
             };
-            import_profile_by_webfinger_address(
+            import_actor_by_webfinger_address(
                 ap_client,
                 db_pool,
                 webfinger_address,
@@ -536,7 +540,7 @@ pub(crate) async fn import_post(
 
     // Fetch ancestors by going through inReplyTo references
     // TODO: fetch replies too
-    #[allow(clippy::while_let_loop)]
+    #[expect(clippy::while_let_loop)]
     loop {
         let object_id = match queue.pop() {
             Some(object_id) => {
@@ -854,7 +858,7 @@ pub async fn import_collection(
             },
             CollectionItemType::Actor => {
                 log::info!("importing actor {item_id}");
-                import_profile(ap_client, db_pool, item).await
+                import_actor(ap_client, db_pool, item).await
                     .map(|profile| profile.expect_remote_actor_id().to_owned())
             },
             CollectionItemType::Activity => {
@@ -967,7 +971,7 @@ pub async fn import_replies(
     let (collection_id, item_type) = if use_context {
         if let Some(collection_id) = object.context_history {
             log::info!("reading 'contextHistory' collection");
-            // Converstion container
+            // Conversation container
             (collection_id, CollectionItemType::Activity)
         } else if let Some(collection_id) = object.context {
             log::info!("reading 'context' collection");
@@ -1092,6 +1096,15 @@ mod tests {
             http_url,
             "https://social.example/.well-known/apgateway/did:key:z6MkvUie7gDQugJmyDQQPhMCCBfKJo7aGvzQYF2BqvFvdwx6/objects/1",
         );
+    }
+
+    #[test]
+    fn test_fetcher_context_prepare_with_query_params() {
+        let gateways = vec![];
+        let page_id = "https://social.example/.well-known/apgateway/did:key:z6MkvUie7gDQugJmyDQQPhMCCBfKJo7aGvzQYF2BqvFvdwx6/collection?page=1";
+        let mut context = FetcherContext::from(gateways);
+        let http_url = context.prepare_object_id(page_id).unwrap();
+        assert_eq!(http_url, page_id);
     }
 
     #[test]

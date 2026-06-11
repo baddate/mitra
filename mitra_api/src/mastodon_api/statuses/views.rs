@@ -40,6 +40,7 @@ use mitra_activitypub::{
 use mitra_adapters::posts::check_post_limits;
 use mitra_config::Config;
 use mitra_models::{
+    accounts::types::Permission,
     bookmarks::queries::{create_bookmark, delete_bookmark},
     conversations::queries::set_conversation_tracking_status,
     database::{
@@ -47,7 +48,7 @@ use mitra_models::{
         DatabaseConnectionPool,
         DatabaseError,
     },
-    polls::types::PollData,
+    polls::types::{PollData, PollResult},
     posts::helpers::{
         add_related_posts,
         add_user_actions,
@@ -73,14 +74,16 @@ use mitra_models::{
         RelatedPosts,
         Visibility,
     },
-    profiles::types::Origin::Local,
+    profiles::{
+        queries::get_profile_by_id,
+        types::Origin::Local,
+    },
     reactions::queries::{
         create_reaction,
         delete_reaction,
-        get_reactions,
+        get_post_reactions_detailed,
     },
     reactions::types::{ReactionData, ReactionDetailed},
-    users::types::Permission,
 };
 use mitra_services::{
     ipfs::{store as ipfs_store},
@@ -124,6 +127,7 @@ use super::types::{
     Context,
     ConversationTrackingData,
     FavouritedByQueryParams,
+    LoadConversationRequest,
     ReblogParams,
     RebloggedByQueryParams,
     Status,
@@ -172,6 +176,17 @@ async fn create_status(
     } else {
         None
     };
+    let maybe_group = if let Some(group_id) = status_data.group_id {
+        match get_profile_by_id(db_client, group_id).await {
+            Ok(profile) if profile.is_group() =>  Some(profile),
+            Ok(_) | Err(DatabaseError::NotFound(_)) => {
+                return Err(ValidationError("invalid group ID").into());
+            },
+            Err(other_error) => return Err(other_error.into()),
+        }
+    } else {
+        None
+    };
     let visibility = match status_data.visibility.as_deref() {
         Some(visibility_str) => visibility_from_str(visibility_str)?,
         None => {
@@ -198,6 +213,7 @@ async fn create_status(
         current_user.id,
         visibility,
         maybe_in_reply_to.as_ref(),
+        maybe_group.as_ref(),
         mentions,
     ).await?;
 
@@ -225,12 +241,16 @@ async fn create_status(
             Visibility::Conversation => None, // will be rejected by validator
             Visibility::Direct => None,
         };
-        PostContext::Top { object_id: None, audience }
+        PostContext::Top {
+            group_id: maybe_group.map(|group| group.id),
+            object_id: None,
+            audience,
+        }
     };
 
     // Prepare poll data
     let maybe_poll_data = if let Some(poll_params) = status_data.poll_params()? {
-        let (results, poll_emojis) = parse_poll_options(
+        let (poll_options, poll_emojis) = parse_poll_options(
             db_client,
             &poll_params.options,
         ).await?;
@@ -243,7 +263,9 @@ async fn create_status(
         let poll_data = PollData {
             multiple_choices: poll_params.multiple.unwrap_or(false),
             ends_at: Some(ends_at),
-            results: results,
+            results: poll_options.into_iter()
+                .map(|name| PollResult::new(&name))
+                .collect(),
         };
         Some(poll_data)
     } else {
@@ -459,6 +481,12 @@ async fn edit_status(
     } else {
         None
     };
+    let maybe_group = if let Some(group_id) = post.group_id {
+        let group = get_profile_by_id(db_client, group_id).await?;
+        Some(group)
+    } else {
+        None
+    };
     let instance = config.instance();
     let status_data = status_data.into_inner();
     // Parse content
@@ -475,6 +503,7 @@ async fn edit_status(
         post.author.id,
         post.visibility,
         maybe_in_reply_to.as_ref(),
+        maybe_group.as_ref(),
         mentions,
     ).await?;
 
@@ -821,7 +850,7 @@ async fn get_favourited_by(
         *status_id,
     ).await?;
     let reactions: Vec<_> = if let Some(current_user) = maybe_current_user {
-        get_reactions(
+        get_post_reactions_detailed(
             db_client,
             post.id,
             Some(current_user.id),
@@ -1230,7 +1259,6 @@ async fn make_permanent(
     let authority = Authority::server(instance.uri());
     let media_server = MediaServer::new(&config);
     let note = build_note(
-        instance.uri(),
         &instance.webfinger_hostname(),
         &authority,
         &media_server,
@@ -1264,6 +1292,7 @@ async fn load_conversation(
     auth: BearerAuth,
     db_pool: web::Data<DatabaseConnectionPool>,
     status_id: web::Path<Uuid>,
+    request_data: web::Json<LoadConversationRequest>,
 ) -> Result<HttpResponse, MastodonError> {
     let db_client = &**get_database_client(&db_pool).await?;
     let current_user = get_current_user(db_client, auth.token()).await?;
@@ -1275,13 +1304,47 @@ async fn load_conversation(
         Some(&current_user.profile),
         *status_id,
     ).await?;
-    let job_data = if let Some(object_id) = post.object_id {
-        FetcherJobData::Context { object_id }
+    let conversation = post.expect_conversation();
+    let root = get_post_by_id(db_client, conversation.root_id).await?;
+    let mut jobs = vec![];
+    if request_data.use_context {
+        if let Some(root_object_id) = root.object_id {
+            // Remote conversation
+            jobs.push(FetcherJobData::Context {
+                object_id: root_object_id.clone(),
+                use_context: true,
+            });
+            // Load replies too because context may be empty (Pleroma)
+            jobs.push(FetcherJobData::Context {
+                object_id: root_object_id,
+                use_context: false,
+            });
+            // Also load replies to selected post
+            if post.id != root.id {
+                if let Some(object_id) = post.object_id {
+                    jobs.push(FetcherJobData::Context {
+                        object_id,
+                        use_context: false,
+                    });
+                };
+            };
+        };
+        // Do not return error if conversation is local
     } else {
-        // Local posts
-        return Err(MastodonError::NotFound("post"));
+        // Legacy mode: find replies to this post
+        if let Some(object_id) = post.object_id {
+            jobs.push(FetcherJobData::Context {
+                object_id,
+                use_context: false,
+            });
+        } else {
+            // Local posts
+            return Err(MastodonError::NotFound("post"));
+        };
     };
-    job_data.into_job(db_client).await?;
+    for job_data in jobs {
+        job_data.into_job(db_client).await?;
+    };
     Ok(HttpResponse::NoContent().finish())
 }
 

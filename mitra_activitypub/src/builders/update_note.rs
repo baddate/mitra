@@ -3,9 +3,9 @@ use serde::Serialize;
 
 use mitra_config::Instance;
 use mitra_models::{
+    accounts::types::User,
     database::{DatabaseClient, DatabaseError},
     posts::types::PostDetailed,
-    users::types::User,
 };
 use mitra_services::media::MediaServer;
 use mitra_utils::id::generate_ulid;
@@ -44,7 +44,6 @@ fn build_update_note(
 ) -> UpdateNote {
     let authority = Authority::server(instance_uri);
     let object = build_note(
-        instance_uri,
         instance_webfinger_hostname,
         &authority,
         media_server,

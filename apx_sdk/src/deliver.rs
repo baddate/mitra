@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use apx_core::{
     http_signatures::create::HttpSignatureError,
-    url::http_url_whatwg::UrlError,
+    url::http_url_whatwg::{get_hostname, UrlError},
 };
 
 use crate::{
@@ -17,7 +17,6 @@ use crate::{
         build_http_request,
         create_http_client,
         describe_request_error,
-        get_network_type,
         limited_response,
         sign_http_request,
         RedirectAction,
@@ -50,7 +49,7 @@ pub enum DelivererError {
     #[error("object serialization error")]
     SerializationError(#[from] serde_json::Error),
 
-    #[error("inavlid URL")]
+    #[error("invalid URL")]
     UrlError(#[from] UrlError),
 
     #[error(transparent)]
@@ -70,10 +69,10 @@ fn create_deliverer_client(
     agent: &FederationAgent,
     request_url: &str,
 ) -> Result<Client, DelivererError> {
-    let network = get_network_type(request_url)?;
+    let hostname = get_hostname(request_url)?;
     let client = create_http_client(
         agent,
-        network,
+        &hostname,
         agent.deliverer_timeout,
         RedirectAction::None, // do not follow redirects
     )?;

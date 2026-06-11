@@ -8,8 +8,12 @@ use apx_sdk::core::{
         },
     },
 };
-use clap::Parser;
+use clap::{
+    Parser,
+    Subcommand,
+};
 
+use mitra_activitypub::adapters::users::create_or_update_local_actor;
 use mitra_adapters::{
     roles::{
         from_default_role,
@@ -20,15 +24,14 @@ use mitra_adapters::{
 };
 use mitra_config::Config;
 use mitra_models::{
-    database::{get_database_client, DatabaseConnectionPool},
-    oauth::queries::delete_oauth_tokens,
-    profiles::types::ANONYMOUS,
-    users::{
+    accounts::{
         helpers::get_user_by_id_or_name,
         queries::{
             create_automated_account,
+            create_invite_code,
             create_user,
             get_accounts_for_admin,
+            get_invite_codes,
             set_user_password,
             set_user_role,
         },
@@ -38,13 +41,15 @@ use mitra_models::{
             UserCreateData,
         },
     },
+    database::{get_database_client, DatabaseConnectionPool},
+    oauth::queries::delete_oauth_tokens,
+    profiles::types::ANONYMOUS,
 };
 use mitra_utils::passwords::hash_password;
-use mitra_validators::users::validate_local_username;
+use mitra_validators::accounts::validate_local_username;
 
 /// Create new account
 #[derive(Parser)]
-#[command(visible_alias = "create-user")]
 pub struct CreateAccount {
     username: String,
     password: String,
@@ -79,7 +84,8 @@ impl CreateAccount {
             invite_code: None,
             role,
         };
-        create_user(db_client, user_data).await?;
+        let account = create_user(db_client, user_data).await?;
+        create_or_update_local_actor(config, db_client, &account).await?;
         println!("account created");
         Ok(())
     }
@@ -87,7 +93,6 @@ impl CreateAccount {
 
 /// Create system account
 #[derive(Parser)]
-#[clap(hide = true)]
 pub struct CreateSystemAccount;
 
 impl CreateSystemAccount {
@@ -112,7 +117,6 @@ impl CreateSystemAccount {
 
 /// List local users
 #[derive(Parser)]
-#[command(visible_alias = "list-users")]
 pub struct ListAccounts;
 
 impl ListAccounts {
@@ -214,5 +218,97 @@ impl RevokeOauthTokens {
         delete_oauth_tokens(db_client, user.id).await?;
         println!("access tokens revoked");
         Ok(())
+    }
+}
+
+/// Generate invite code
+#[derive(Parser)]
+pub struct GenerateInviteCode {
+    note: Option<String>,
+}
+
+impl GenerateInviteCode {
+    pub async fn execute(
+        self,
+        db_pool: &DatabaseConnectionPool,
+    ) -> Result<(), Error> {
+        let db_client = &**get_database_client(db_pool).await?;
+        let invite_code = create_invite_code(
+            db_client,
+            self.note.as_deref(),
+        ).await?;
+        println!("generated invite code: {}", invite_code);
+        Ok(())
+    }
+}
+
+/// List invite codes
+#[derive(Parser)]
+pub struct ListInviteCodes;
+
+impl ListInviteCodes {
+    pub async fn execute(
+        self,
+        db_pool: &DatabaseConnectionPool,
+    ) -> Result<(), Error> {
+        let db_client = &**get_database_client(db_pool).await?;
+        let invite_codes = get_invite_codes(db_client).await?;
+        if invite_codes.is_empty() {
+            println!("no invite codes found");
+            return Ok(());
+        };
+        for invite_code in invite_codes {
+            if let Some(note) = invite_code.note {
+                println!("{} ({})", invite_code.code, note);
+            } else {
+                println!("{}", invite_code.code);
+            };
+        };
+        Ok(())
+    }
+}
+
+/// Manage accounts
+#[derive(Subcommand)]
+pub enum AccountCommand {
+    Create(CreateAccount),
+    List(ListAccounts),
+    Password(SetPassword),
+    Role(SetRole),
+    Logout(RevokeOauthTokens),
+}
+
+impl AccountCommand {
+    pub async fn execute(
+        self,
+        config: &Config,
+        db_pool: &DatabaseConnectionPool,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Create(command) => command.execute(config, db_pool).await,
+            Self::List(command) => command.execute(db_pool).await,
+            Self::Password(command) => command.execute(db_pool).await,
+            Self::Role(command) => command.execute(db_pool).await,
+            Self::Logout(command) => command.execute(db_pool).await,
+        }
+    }
+}
+
+/// Manage invite codes
+#[derive(Subcommand)]
+pub enum InviteCommand {
+    Create(GenerateInviteCode),
+    List(ListInviteCodes),
+}
+
+impl InviteCommand {
+    pub async fn execute(
+        self,
+        db_pool: &DatabaseConnectionPool,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Create(command) => command.execute(db_pool).await,
+            Self::List(command) => command.execute(db_pool).await,
+        }
     }
 }

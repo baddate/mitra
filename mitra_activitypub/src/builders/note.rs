@@ -4,7 +4,6 @@ use apx_sdk::{
     constants::{AP_MEDIA_TYPE, AP_PUBLIC},
     core::{
         multihash::encode_sha256_multihash,
-        url::http_uri::HttpUri,
     },
     deserialization::deserialize_string_array,
 };
@@ -20,6 +19,7 @@ use mitra_models::{
         queries::get_post_author,
         types::{PostDetailed, Visibility},
     },
+    profiles::queries::get_profile_by_id,
     relationships::queries::{get_followers, get_subscribers},
 };
 use mitra_services::media::MediaServer;
@@ -156,6 +156,8 @@ pub struct Note {
 
     pub to: Vec<String>,
     pub cc: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audience: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     quote: Option<String>,
@@ -169,19 +171,14 @@ pub struct Note {
 }
 
 pub fn build_note(
-    instance_uri: &HttpUri,
     instance_webfinger_hostname: &str,
     authority: &Authority,
     media_server: &MediaServer,
     post: &PostDetailed,
     with_context: bool,
 ) -> Note {
+    let server_uri = authority.expect_server_uri();
     let related_posts = post.expect_related_posts();
-    assert_eq!(
-        authority.expect_server_uri(),
-        instance_uri,
-        "authority should be anchored",
-    );
     let object_id = local_object_id_unified(authority, post.id);
     let mut object_type = NOTE;
     let actor_id = local_actor_id_unified(authority, post.author.id, &post.author.username);
@@ -205,6 +202,7 @@ pub fn build_note(
 
     let mut primary_audience = vec![];
     let mut secondary_audience = vec![];
+    let mut group_audience = None;
     let followers_collection_id =
         LocalActorCollection::Followers.of(&actor_id);
     let subscribers_collection_id =
@@ -259,6 +257,10 @@ pub fn build_note(
         if !primary_audience.contains(&actor_id) {
             primary_audience.push(actor_id.clone());
         };
+        // TODO: do not require group mentions
+        if post.group_id.is_some_and(|group_id| group_id == profile.id) {
+            group_audience = Some(actor_id.clone());
+        };
         let tag = SimpleTag {
             tag_type: MENTION.to_string(),
             name: tag_name,
@@ -267,7 +269,8 @@ pub fn build_note(
         tags.push(Tag::SimpleTag(tag));
     };
     for tag_name in &post.tags {
-        let tag_href = local_tag_collection(instance_uri.as_str(), tag_name);
+        // TODO: FEP-EF61: client should use server's URL template
+        let tag_href = local_tag_collection(server_uri.as_str(), tag_name);
         let tag = SimpleTag {
             tag_type: HASHTAG.to_string(),
             name: format!("#{}", tag_name),
@@ -301,7 +304,8 @@ pub fn build_note(
         .map(|linked| compatible_post_object_id(authority, linked));
 
     for emoji in &post.emojis {
-        let tag = build_emoji(instance_uri.as_str(), media_server, emoji);
+        // TODO: FEP-EF61: portable or anonymous emojis?
+        let tag = build_emoji(server_uri.as_str(), media_server, emoji);
         tags.push(Tag::EmojiTag(tag));
     };
 
@@ -338,9 +342,8 @@ pub fn build_note(
     };
     let conversation = post.expect_conversation();
     let maybe_context_id = if conversation.is_managed {
-        // TODO: FEP-EF61: use Authority
         let context_collection_id =
-            local_conversation_collection(instance_uri.as_str(), conversation.id);
+            local_conversation_collection(authority, conversation.id);
         Some(context_collection_id)
     } else {
         conversation.object_id.clone()
@@ -369,6 +372,7 @@ pub fn build_note(
         end_time: end_time,
         to: primary_audience,
         cc: secondary_audience,
+        audience: group_audience,
         quote: maybe_quote_url.clone(),
         quote_url: maybe_quote_url,
         published: post.created_at,
@@ -403,6 +407,10 @@ pub async fn get_note_recipients(
         let in_reply_to_author = get_post_author(db_client, in_reply_to_id).await?;
         primary_audience.push(in_reply_to_author);
     };
+    if let Some(group_id) = post.group_id {
+         let group = get_profile_by_id(db_client, group_id).await?;
+        primary_audience.push(group);
+    };
     primary_audience.extend(post.mentions.clone());
     if let Some(ref poll) = post.poll {
         let voters = get_voters(db_client, poll.id).await?;
@@ -428,14 +436,15 @@ pub async fn get_note_recipients(
 
 #[cfg(test)]
 mod tests {
+    use apx_core::url::http_uri::HttpUri;
     use serde_json::json;
     use uuid::uuid;
     use mitra_models::{
+        accounts::types::User,
         conversations::types::Conversation,
         polls::types::{Poll, PollResult, PollResults},
         posts::types::RelatedPosts,
         profiles::types::{DbActor, DbActorProfile},
-        users::types::User,
     };
     use super::*;
 
@@ -471,7 +480,6 @@ mod tests {
         let authority = Authority::server(&instance_uri);
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let note = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -550,7 +558,6 @@ mod tests {
         let authority = Authority::server(&instance_uri);
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let question = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -609,7 +616,6 @@ mod tests {
         let authority = Authority::server(&instance_uri);
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let note = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -640,7 +646,6 @@ mod tests {
         let authority = Authority::server(&instance_uri);
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let note = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -672,7 +677,6 @@ mod tests {
         let authority = Authority::server(&instance_uri);
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let note = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -699,7 +703,6 @@ mod tests {
         let authority = Authority::server(&instance_uri);
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let note = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -753,7 +756,6 @@ mod tests {
         let authority = Authority::server(&instance_uri);
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let note = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -825,7 +827,6 @@ mod tests {
         let authority = Authority::server(&instance_uri);
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let note = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -903,7 +904,6 @@ mod tests {
         );
         let media_server = MediaServer::for_test(INSTANCE_URI);
         let note = build_note(
-            &instance_uri,
             INSTANCE_HOSTNAME,
             &authority,
             &media_server,
@@ -928,7 +928,7 @@ mod tests {
             "attributedTo": "https://server.example/.well-known/apgateway/did:key:z6MkvUie7gDQugJmyDQQPhMCCBfKJo7aGvzQYF2BqvFvdwx6/actors/46d160ae-af12-484d-9f44-419f00fc1b31",
             "content": "",
             "sensitive": false,
-            "context": "https://server.example/collections/conversations/837ffc24-dab2-414b-a9b8-fe47d0a463f2",
+            "context": "https://server.example/.well-known/apgateway/did:key:z6MkvUie7gDQugJmyDQQPhMCCBfKJo7aGvzQYF2BqvFvdwx6/collections/conversations/837ffc24-dab2-414b-a9b8-fe47d0a463f2",
             "replies": "https://server.example/.well-known/apgateway/did:key:z6MkvUie7gDQugJmyDQQPhMCCBfKJo7aGvzQYF2BqvFvdwx6/objects/11fa64ff-b5a3-47bf-b23d-22b360581c3f/replies",
             "tag": [{
                 "type": "Mention",

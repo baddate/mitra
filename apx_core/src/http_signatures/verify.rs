@@ -98,35 +98,34 @@ pub struct HttpSignatureData {
     pub base: String, // recreated signature base
     pub signature: Vec<u8>,
     pub expires_at: DateTime<Utc>,
+    /// The authority of the target URI
+    pub authority: String,
     pub content_digest: Option<ContentDigest>,
 }
 
+// Returns header name and its parsed value.
+// The header name should be added to the list of required components.
 fn get_content_digest(
-    components: &[&str],
+    method: &Method,
     headers: &HeaderMap,
-) -> Result<Option<ContentDigest>, VerificationError> {
-    let maybe_signed_header = components
-        .iter()
-        .copied()
-        .find(|id| *id == HEADER_DIGEST || *id == HEADER_CONTENT_DIGEST);
-    let (header_name, header_value) = match maybe_signed_header {
-        Some(header_name) => {
-            if let Some(header_value) = headers.get(header_name) {
-                (header_name, header_value)
-            } else {
-                // Signed header must be present
-                return Err(VerificationError::NoDigest);
-            }
-        },
-        None => {
-            if let Some(header_value) = headers.get(HEADER_CONTENT_DIGEST) {
-                (HEADER_CONTENT_DIGEST, header_value)
-            } else if let Some(header_value) = headers.get(HEADER_DIGEST) {
-                (HEADER_DIGEST, header_value)
-            } else {
-                return Ok(None);
-            }
-        },
+    components: &[&str],
+) -> Result<Option<(&'static str, ContentDigest)>, VerificationError> {
+    let (Method::POST | Method::PUT | Method::PATCH) = *method else {
+        return Ok(None);
+    };
+    // Prefer signed header over unsigned.
+    // Prefer Content-Digest over Digest.
+    let header_name = if components.contains(&HEADER_CONTENT_DIGEST) {
+        HEADER_CONTENT_DIGEST
+    } else if components.contains(&HEADER_DIGEST) {
+        HEADER_DIGEST
+    } else if headers.contains_key(HEADER_CONTENT_DIGEST) {
+        HEADER_CONTENT_DIGEST
+    } else {
+        HEADER_DIGEST
+    };
+    let Some(header_value) = headers.get(header_name) else {
+        return Err(VerificationError::NoDigest);
     };
     let header_value = header_value
         .to_str()
@@ -141,7 +140,7 @@ fn get_content_digest(
             header_name.to_owned(),
             error,
         ))?;
-    Ok(Some(content_digest))
+    Ok(Some((header_name, content_digest)))
 }
 
 fn check_required_components(
@@ -190,6 +189,11 @@ pub fn parse_http_signature_cavage(
     let signature_b64 = signature_parameters.get("signature")
         .ok_or(VerificationError::ParseError("signature is missing"))?;
     let signature = base64::decode(signature_b64)?;
+    let target_authority = request_headers.get("Host")
+        .ok_or(VerificationError::header_missing("Host"))?
+        .to_str()
+        .map_err(|_| VerificationError::header_value("Host"))?
+        .to_string();
     let created_at = if let Some(created_at) = signature_parameters.get("created") {
         let create_at_timestamp = created_at.parse()
             .map_err(|_| VerificationError::ParseError("invalid timestamp"))?;
@@ -214,11 +218,20 @@ pub fn parse_http_signature_cavage(
     };
 
     let signed_headers: Vec<_> = headers_parameter.split(' ').collect();
+    let mut required_components = REQUIRED_COMPONENTS_CAVAGE.to_vec();
+    let maybe_digest = get_content_digest(
+        request_method,
+        request_headers,
+        &signed_headers,
+    )?
+        .map(|(header_name, content_digest)| {
+            required_components.push(header_name);
+            content_digest
+        });
     check_required_components(
         &signed_headers,
-        &REQUIRED_COMPONENTS_CAVAGE,
+        &required_components,
     )?;
-    let maybe_digest = get_content_digest(&signed_headers, request_headers)?;
 
     // Recreate signature base
     let mut signature_base_entries = IndexMap::new();
@@ -257,6 +270,7 @@ pub fn parse_http_signature_cavage(
         base: signature_base,
         signature,
         expires_at,
+        authority: target_authority,
         content_digest: maybe_digest,
         is_rfc9421: false,
     };
@@ -264,12 +278,12 @@ pub fn parse_http_signature_cavage(
 }
 
 /// Parses RFC-9421 HTTP message signature  
-/// <https://datatracker.ietf.org/doc/html/rfc9421>
+/// <https://www.rfc-editor.org/rfc/rfc9421>
 pub fn parse_http_signature_rfc9421(
     request_method: &Method,
     request_uri: &Uri,
     request_headers: &HeaderMap,
-    required_components: &[&'static str],
+    ignore_required_components: bool,
 ) -> Result<HttpSignatureData, VerificationError> {
     // Parse Signature header
     let signature_header = request_headers.get("Signature")
@@ -333,9 +347,23 @@ pub fn parse_http_signature_rfc9421(
             .as_str();
         components.push(component_id);
     };
+    let target_authority = request_uri.authority()
+        .ok_or(VerificationError::ParseError("incomplete request URI"))?
+        .to_string();
 
-    check_required_components(&components, required_components)?;
-    let maybe_digest = get_content_digest(&components, request_headers)?;
+    let mut required_components = REQUIRED_COMPONENTS_RFC9421.to_vec();
+    let maybe_digest = get_content_digest(
+        request_method,
+        request_headers,
+        &components,
+    )?
+        .map(|(header_name, content_digest)| {
+            required_components.push(header_name);
+            content_digest
+        });
+    if !ignore_required_components {
+        check_required_components(&components, &required_components)?;
+    };
 
     // Recreate signature base
     let mut signature_base_entries = IndexMap::new();
@@ -362,16 +390,13 @@ pub fn parse_http_signature_rfc9421(
                 request_uri.path().to_owned()
             },
             "@query" => {
-                // https://datatracker.ietf.org/doc/html/rfc9421#name-query
+                // https://www.rfc-editor.org/rfc/rfc9421#name-query
                 let query = request_uri.query().unwrap_or_default();
                 format!("?{query}")
             },
             "@authority" => {
-                request_headers.get("host")
-                    .ok_or(VerificationError::header_missing("Host"))?
-                    .to_str()
-                    .map_err(|_| VerificationError::header_value("Host"))?
-                    .to_owned()
+                // https://www.rfc-editor.org/rfc/rfc9421#name-authority
+                target_authority.clone()
             },
             id if id.starts_with('@') => {
                 return Err(VerificationError::UnsupportedComponent(id.to_owned()));
@@ -398,6 +423,7 @@ pub fn parse_http_signature_rfc9421(
         base: signature_base,
         signature: signature_value,
         expires_at,
+        authority: target_authority,
         content_digest: maybe_digest,
         is_rfc9421: true,
     };
@@ -413,7 +439,7 @@ pub fn parse_http_signature(
     if headers.get("Signature-Input").is_some() {
         parse_http_signature_rfc9421(
             method, uri, headers,
-            &REQUIRED_COMPONENTS_RFC9421,
+            false, // check required components
         )
     } else {
         parse_http_signature_cavage(method, uri, headers)
@@ -528,14 +554,10 @@ mod tests {
 
     #[test]
     fn test_parse_http_signature_rfc9421() {
-        // https://datatracker.ietf.org/doc/html/rfc9421#name-signing-a-request-using-ed2
+        // https://www.rfc-editor.org/rfc/rfc9421#name-signing-a-request-using-ed2
         let request_method = Method::POST;
-        let request_uri = "/foo?param=Value&Pet=dog".parse::<Uri>().unwrap();
+        let request_uri = "https://example.com/foo?param=Value&Pet=dog".parse::<Uri>().unwrap();
         let mut request_headers = HeaderMap::new();
-        request_headers.insert(
-            HeaderName::from_static("host"),
-            HeaderValue::from_static("example.com"),
-        );
         request_headers.insert(
             HeaderName::from_static("date"),
             HeaderValue::from_static("Tue, 20 Apr 2021 02:07:55 GMT"),
@@ -565,7 +587,7 @@ mod tests {
             &request_method,
             &request_uri,
             &request_headers,
-            &[],
+            true, // ignore required components
         ).unwrap();
 
         let expected_signature_base =
@@ -579,6 +601,28 @@ r#""date": Tue, 20 Apr 2021 02:07:55 GMT
         assert_eq!(signature_data.is_rfc9421, true);
         assert_eq!(signature_data.base, expected_signature_base);
         assert_eq!(signature_data.content_digest.is_some(), true);
+    }
+
+    #[test]
+    fn test_parse_http_signature_rfc9421_missing_content_digest_header() {
+        let request_method = Method::POST;
+        let request_uri = Uri::from_static("https://verifier.example/inbox");
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(
+            HeaderName::from_static("signature-input"),
+            HeaderValue::from_static(r#"sig-b26=("@method" "@target-uri" "content-digest");created=1618884473;keyid="https://signer.example/key""#),
+        );
+        request_headers.insert(
+            HeaderName::from_static("signature"),
+            HeaderValue::from_static("sig-b26=:wqcAqbmYJ2ji2glfAMaRy4gruYYnx2nEFN2HN6jrnDnQCK1u02Gb04v9EDgwUPiu4A0w6vuQv5lIp5WPpBKRCw==:"),
+        );
+        let error = parse_http_signature_rfc9421(
+            &request_method,
+            &request_uri,
+            &request_headers,
+            false,
+        ).err().unwrap();
+        assert_eq!(error.to_string(), "missing content digest");
     }
 
     #[test]
@@ -757,7 +801,7 @@ r#""date": Tue, 20 Apr 2021 02:07:55 GMT
             &request_method,
             &request_uri,
             &request_headers,
-            &REQUIRED_COMPONENTS_RFC9421,
+            false,
         ).unwrap();
         assert_eq!(signature_data.content_digest.is_some(), true);
 
@@ -798,7 +842,7 @@ r#""date": Tue, 20 Apr 2021 02:07:55 GMT
             &request_method,
             &request_uri,
             &request_headers,
-            &REQUIRED_COMPONENTS_RFC9421,
+            false,
         ).unwrap();
         assert_eq!(signature_data.content_digest.is_none(), true);
 

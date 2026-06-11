@@ -18,6 +18,7 @@ use uuid::Uuid;
 use mitra_activitypub::{
     adapters::posts::delete_local_post,
     agent::build_federation_agent,
+    authority::Authority,
     builders::{
         create_note::build_create_note,
         collection::OrderedCollection,
@@ -30,6 +31,7 @@ use mitra_adapters::{
 };
 use mitra_config::Config;
 use mitra_models::{
+    accounts::helpers::get_user_by_id_or_name,
     attachments::queries::create_attachment,
     database::{
         db_client_await,
@@ -49,7 +51,6 @@ use mitra_models::{
         types::{PostContext, PostCreateData, Visibility},
     },
     profiles::types::Origin::Local,
-    users::helpers::get_user_by_id_or_name,
 };
 use mitra_services::media::{MediaServer, MediaStorage};
 use mitra_utils::{
@@ -142,6 +143,7 @@ impl CreatePost {
         let post_data = PostCreateData {
             id: Some(post_id),
             context: PostContext::Top {
+                group_id: None,
                 object_id: None,
                 audience: Some(AP_PUBLIC.to_owned()),
             },
@@ -280,10 +282,11 @@ impl ExportPosts {
             self.limit,
         ).await?;
         add_related_posts(db_client, posts.iter_mut().collect()).await?;
+        let authority = Authority::from(&instance);
         let media_server = MediaServer::new(config);
         let activities = posts.iter().map(|post| {
             let activity = build_create_note(
-                instance.uri(),
+                &authority,
                 &instance.webfinger_hostname(),
                 &media_server,
                 post,

@@ -8,15 +8,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added `NonCanonicalUri` type to `url::canonical` module.
+
+### Deprecated
+
+- Deprecated `parse_url` function.
+
+### Security
+
+- Block requests to shared and benchmarking IP addresses.
+
+## [0.25.0] - 2026-05-30
+
+### Added
+
+- Re-exported `Host` from `http_url_whatwg` module.
+- Added `no_proxy` parameter to `FederationAgent`.
+- Implemented `Debug` and `PartialEq` for `PublicKey` type.
+- Added `to_multikey` and `to_pem` methods to `PublicKey` type.
+
+### Changed
+
+- Changed MSRV to 1.81.0.
+- Migrated to `thiserror` 2.0.
+- Replaced `required_components` argument in `parse_http_signature_rfc9421` with a boolean flag.
+- Don't try to extract content digest if request method is not POST, PUT or PATCH.
+- Changed return type of `get_hostname` to `Host<String>`.
+
+### Security
+
+- Return `NoDigest` error if digest header is not present in POST, PUT or PATCH request.
+- Require signed digest header if request method is POST, PUT or PATCH.
+
+## [0.24.0] - 2026-05-13
+
+### Added
+
+- Added `authority` field to `HttpSignatureData` struct.
+- Added `verify_fetched_object` function.
+- Added `resource_uri` method to `WebfingerAddress`.
+
+### Changed
+
+- Extract authority from request URI when processing `@authority` RFC-9421 component.
+- Do not perform authentication in `fetch_object` function.
+- Do not extract fragment in `fetch_object` function.
+
+### Removed
+
+- Removed `query` parameter from `fetch_json` function.
+
+### Security
+
+- Harden SSRF protection by treating link-local and unspecified addresses as unsafe.
+- Block requests to mapped IPv4 private addresses.
+
+## [0.23.0] - 2026-05-05
+
+### Added
+
 - Added documentation to `apx_sdk::addresses` module.
 - Implemented `Hash` for `WebfingerAddress`.
 - Added `actor_id` method to `JsonResourceDescriptor` type.
 - Added `is_subdomain_of` function to `hostname` module.
+- Implemented `Debug` for `CanonicalUri` type.
 
 ### Changed
 
 - Renamed `WebfingerAddress::acct` to `short_address`.
 - Renamed `find_actor_id` method on `JsonResourceDescriptor` to `actor_id_for_type`.
+- Add `alg` parameter to RFC-9421 signatures.
 
 ### Fixed
 
