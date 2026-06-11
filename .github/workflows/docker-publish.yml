@@ -132,6 +132,12 @@ jobs:
           cache-from: type=gha,scope=mitra-${{ matrix.platform }}
           cache-to: type=gha,scope=mitra-${{ matrix.platform }},mode=max
 
+      - name: Manual Trivy Setup
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          cache: true
+          version: v0.71.0
+
       - name: Trivy vulnerability scan
         if: matrix.platform == 'linux/amd64'
         uses: aquasecurity/trivy-action@v0.36.0
@@ -143,6 +149,7 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
+          skip-setup-trivy: true
 
       - name: Upload Trivy SARIF
         if: matrix.platform == 'linux/amd64' && always()
