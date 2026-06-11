@@ -17,7 +17,9 @@
 # -----------------------------------------------------------------------------
 FROM node:24-alpine AS frontend-build
 
-RUN apk add --no-cache git
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache git
 
 WORKDIR /app
 
@@ -42,7 +44,9 @@ RUN npm ci --prefer-offline \
 FROM rust:alpine AS chef
 
 # musl-dev provides the C headers needed by some *-sys crates under musl libc
-RUN apk add --no-cache musl-dev \
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache musl-dev \
  && cargo install cargo-chef --locked
 
 WORKDIR /app
@@ -96,7 +100,9 @@ RUN cargo build --release --features production
 FROM alpine:3.24
 
 # ca-certificates: required for outgoing TLS connections (e.g. federation)
-RUN apk add --no-cache ca-certificates
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates
 
 # Create a dedicated non-root user for the service
 RUN addgroup -S mitra \
