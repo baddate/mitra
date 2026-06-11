@@ -93,7 +93,7 @@ RUN cargo build --release --features production
 # Minimal Alpine image: only the binary, frontend assets, and ca-certificates.
 # No compiler, no Rust toolchain, no build artefacts.
 # -----------------------------------------------------------------------------
-FROM alpine:3.22
+FROM alpine:3.24
 
 # ca-certificates: required for outgoing TLS connections (e.g. federation)
 RUN apk add --no-cache ca-certificates
