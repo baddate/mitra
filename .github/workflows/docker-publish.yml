@@ -143,19 +143,19 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}:scan-target
-          format: sarif
-          output: trivy-results.sarif
+          format: table
+          # output: trivy-results.sarif
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
           skip-setup-trivy: true
 
-      - name: Upload Trivy SARIF
-        if: matrix.platform == 'linux/amd64' && always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results.sarif
+      # - name: Upload Trivy SARIF
+      #   if: matrix.platform == 'linux/amd64' && always()
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   with:
+      #     sarif_file: trivy-results.sarif
 
       # -----------------------------------------------------------------------
       # 5. Build and push a digest-only image
