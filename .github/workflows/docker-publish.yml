@@ -88,9 +88,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # Currently unused: the SARIF upload step below is commented out, so
-      # Trivy only gates the build via exit-code. Kept here so re-enabling
-      # "Upload Trivy SARIF" doesn't also require a permissions PR.
+      # Required by "Upload Trivy SARIF" (github/codeql-action/upload-sarif)
+      # to publish scan results to the repo's Code Scanning tab.
       security-events: write
 
     strategy:
@@ -179,24 +178,44 @@ jobs:
           cache: true
           version: v0.71.0
 
-      - name: Trivy vulnerability scan
+      # Two separate scans because Trivy's `format` controls how the *single*
+      # result set is rendered — you can't get both a human-readable table in
+      # the job log and a machine-readable SARIF file from one invocation.
+      # The table scan is what gates the build (exit-code: "1"); the SARIF
+      # scan is purely for the Code Scanning upload and must never fail the
+      # job itself (exit-code: "0"), otherwise a vulnerability would abort
+      # the workflow before the SARIF upload step runs.
+      - name: Trivy vulnerability scan (table, gates the build)
         if: matrix.platform == 'linux/amd64'
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}:scan-target
           format: table
-          # output: trivy-results.sarif
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
           skip-setup-trivy: true
 
-      # - name: Upload Trivy SARIF
-      #   if: matrix.platform == 'linux/amd64' && always()
-      #   uses: github/codeql-action/upload-sarif@v3
-      #   with:
-      #     sarif_file: trivy-results.sarif
+      - name: Trivy vulnerability scan (SARIF, for Code Scanning)
+        if: matrix.platform == 'linux/amd64' && always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}:scan-target
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "0"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          skip-setup-trivy: true
+
+      - name: Upload Trivy SARIF
+        if: matrix.platform == 'linux/amd64' && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
 
       # -----------------------------------------------------------------------
       # 5. Build and push a digest-only image, once per registry.
