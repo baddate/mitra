@@ -267,12 +267,29 @@ jobs:
       #    job. Once verified equal, only one digest needs to be recorded –
       #    the merge job's SOURCES_GHCR / SOURCES_DH construction reuses the
       #    same digest value against each registry's own image name.
+      #
+      #    IMPORTANT – avoiding digest collisions across arches:
+      #    The digest file is written under a directory NAMED AFTER THE ARCH
+      #    (amd64/ or arm64/), not directly under /tmp/digests. This matters
+      #    because the merge job downloads both arch artifacts with
+      #    `merge-multiple: true`, which flattens everything into one
+      #    directory by *filename*. If amd64 and arm64 ever produced the same
+      #    digest (e.g. a Dockerfile bug that makes the build
+      #    architecture-independent, or a future refactor that removes
+      #    per-arch differences), a bare `touch "/tmp/digests/$digest"` would
+      #    silently collapse both files into one and the merge job would
+      #    build a single-arch manifest without any error. Keeping the arch
+      #    name in the path means the flattened merge job layout is
+      #    /tmp/digests/amd64/<digest> and /tmp/digests/arm64/<digest>, which
+      #    can never collide even if the digest values themselves do.
       # -----------------------------------------------------------------------
       - name: Export digest
         if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
-          mkdir -p /tmp/digests
+
+          arch="${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}"
+          mkdir -p "/tmp/digests/${arch}"
 
           ghcr_digest="${{ steps.build-ghcr.outputs.digest }}"
           dockerhub_digest="${{ steps.build-dockerhub.outputs.digest }}"
@@ -285,15 +302,17 @@ jobs:
             exit 1
           fi
 
-          # Write an empty file whose *name* is the digest (sha256: prefix stripped).
-          touch "/tmp/digests/${ghcr_digest#sha256:}"
+          # Write an empty file whose *name* is the digest (sha256: prefix
+          # stripped), under an arch-named directory so two arches can never
+          # collide even if they happened to produce the same digest.
+          touch "/tmp/digests/${arch}/${ghcr_digest#sha256:}"
 
       - name: Upload digest artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: digest-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
-          path: /tmp/digests/*
+          path: /tmp/digests/*/*
           if-no-files-found: error
           retention-days: 1
 
@@ -366,8 +385,15 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 5. Create and push the multi-arch manifest
-      #    Reads every file in /tmp/digests (one per arch), assembles them into
-      #    a manifest list, and tags it with all computed tags.
+      #    Reads one digest file per arch subdirectory (/tmp/digests/amd64/,
+      #    /tmp/digests/arm64/ – see the "Export digest" step in the build
+      #    job for why the arch subdirectory matters), assembles them into a
+      #    manifest list, and tags it with all computed tags.
+      #
+      #    We explicitly assert exactly one digest file per expected arch
+      #    before building the source list. This turns a missing arch or an
+      #    accidental digest collision into a loud failure here, rather than
+      #    silently producing a manifest with fewer platforms than intended.
       # -----------------------------------------------------------------------
       - name: Create multi-arch manifest and push tags
         working-directory: /tmp/digests
@@ -376,15 +402,33 @@ jobs:
         run: |
           set -euo pipefail
           echo "Available digests:"
-          ls -l
+          find . -type f
+
+          EXPECTED_ARCHES="amd64 arm64"
+          SOURCES_GHCR=""
+          SOURCES_DH=""
+
+          for arch in $EXPECTED_ARCHES; do
+            if [ ! -d "$arch" ]; then
+              echo "::error::No digest directory found for arch '$arch' (expected /tmp/digests/$arch/). The build job for this arch may have failed or not uploaded its artifact."
+              exit 1
+            fi
+
+            count=$(find "$arch" -maxdepth 1 -type f | wc -l)
+            if [ "$count" -ne 1 ]; then
+              echo "::error::Expected exactly 1 digest file for arch '$arch', found $count. Refusing to guess which one is correct."
+              find "$arch" -maxdepth 1 -type f
+              exit 1
+            fi
+
+            digest=$(basename "$(find "$arch" -maxdepth 1 -type f)")
+            SOURCES_GHCR="${SOURCES_GHCR}${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:${digest} "
+            SOURCES_DH="${SOURCES_DH}docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}@sha256:${digest} "
+          done
 
           # Extract and isolate tags for each registry
           TAGS_GHCR=$(echo "$META_JSON" | jq -cr '.tags | map(select(contains("ghcr.io"))) | map("-t " + .) | join(" ")')
           TAGS_DH=$(echo "$META_JSON" | jq -cr '.tags | map(select(contains("docker.io"))) | map("-t " + .) | join(" ")')
-
-          # Prepare sources for each registry
-          SOURCES_GHCR=$(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
-          SOURCES_DH=$(printf 'docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}@sha256:%s ' *)
 
           echo "Creating and pushing GHCR manifest..."
           eval docker buildx imagetools create $TAGS_GHCR $SOURCES_GHCR
