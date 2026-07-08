@@ -135,7 +135,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # -----------------------------------------------------------------------
@@ -262,7 +262,7 @@ jobs:
           context: .
           file: contrib/docker/Dockerfile
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=docker.io/${{ vars.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
           build-args: |
@@ -382,7 +382,7 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # -----------------------------------------------------------------------
@@ -394,7 +394,7 @@ jobs:
         with:
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE }}
-            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
@@ -442,7 +442,7 @@ jobs:
 
             digest=$(basename "$(find "$arch" -maxdepth 1 -type f)")
             SOURCES_GHCR="${SOURCES_GHCR}${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:${digest} "
-            SOURCES_DH="${SOURCES_DH}docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}@sha256:${digest} "
+            SOURCES_DH="${SOURCES_DH}docker.io/${{ vars.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}@sha256:${digest} "
           done
 
           # Extract and isolate tags for each registry
@@ -454,13 +454,6 @@ jobs:
 
           echo "Creating and pushing Docker Hub manifest..."
           eval docker buildx imagetools create $TAGS_DH $SOURCES_DH
-
-      - name: Update repo description
-        uses: peter-evans/dockerhub-description@e98e4d1628a5f3be2be7c231e50981aee98723ae # v4.0.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ github.repository }}
 
       # -----------------------------------------------------------------------
       # 6. Verify both manifests look correct
@@ -478,7 +471,7 @@ jobs:
       - name: Inspect Docker Hub manifest
         run: |
           docker buildx imagetools inspect \
-            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}:${{ steps.meta.outputs.version }}
+            docker.io/${{ vars.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}:${{ steps.meta.outputs.version }}
 
       # -----------------------------------------------------------------------
       # 7. Keyless cosign signing via Sigstore OIDC – no secrets needed.
@@ -505,7 +498,7 @@ jobs:
           set -euo pipefail
 
           GHCR_REF="${{ env.REGISTRY }}/${{ env.IMAGE }}"
-          DH_REF="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}"
+          DH_REF="docker.io/${{ vars.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}"
 
           GHCR_DIGEST=$(docker buildx imagetools inspect "${GHCR_REF}:${{ steps.meta.outputs.version }}" \
             --format '{{json .Manifest.Digest}}' | tr -d '"')
