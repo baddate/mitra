@@ -1,6 +1,6 @@
 # compose.yml
 #
-# Run Mitra using the pre-built image from GitHub Container Registry.
+# Run Mitra using the pre-built image from Docker Hub
 #
 # Quick start:
 #   1. Copy config:  cp /usr/share/mitra/examples/config.example.yaml ./config.yaml
@@ -11,7 +11,7 @@
 #   docker compose pull && docker compose up -d
 #
 # Viewing logs:
-#   docker compose logs -f mitra
+#   docker compose logs -f app
 
 services:
   # ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ services:
   # Mitra
   # ---------------------------------------------------------------------------
   app:
-    image: ghcr.io/baddate/mitra:latest
+    image: baddate/mitra:latest
     container_name: mitra-server
     restart: unless-stopped
     depends_on:
@@ -56,9 +56,11 @@ services:
       - ./config.yaml:/etc/mitra/config.yaml:ro
       # Persistent media uploads and instance data
       - mitra_data:/var/lib/mitra
+      # Uncomment it to set favicon
+      # change `/usr/share/mitra/www` to your web_client_dir
+      # web_client_dir defined in config.yaml/toml
+      # - ./favicon.ico:/usr/share/mitra/www/favicon.ico:ro
     environment:
-      # Rust log level: error | warn | info | debug | trace
-      RUST_LOG: ${RUST_LOG:-info}
       # The instance url int config.yaml/toml
       VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://127.0.0.1:8383}
     healthcheck:
