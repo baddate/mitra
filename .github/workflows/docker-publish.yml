@@ -56,6 +56,23 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      frontend_repo:
+        description: 'Override Frontend Repository URL (Leave blank to use default)'
+        required: false
+        type: string
+      frontend_branch:
+        description: 'Override Frontend Branch (Leave blank to use main)'
+        required: false
+        type: string
+      mitra_version:
+        description: 'Override Mitra Version/Tag (Leave blank for auto-detection)'
+        required: false
+        type: string
+      vite_backend_url:
+        description: 'Override Mitra Server Url (Leave blank to use placeholder)'
+        required: false
+        type: string
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -64,15 +81,15 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE: ${{ github.repository }}
-  FRONTEND_REPO: ${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
-  FRONTEND_BRANCH: ${{ vars.FRONTEND_BRANCH || 'main' }}
+  FRONTEND_REPO: ${{ inputs.frontend_repo || vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
+  FRONTEND_BRANCH: ${{ inputs.frontend_branch || vars.FRONTEND_BRANCH || 'main' }}
   # tag push (or manual dispatch against a tag) → follow the tag automatically.
   # Everything else (push to main, manual dispatch against a branch) → use the
   # MITRA_VERSION repository variable, falling back to "main".
   # pull_request is intentionally NOT special-cased here: PR builds should
   # keep checking out the PR's own ref, not a pinned version.
-  MITRA_VERSION: ${{ (github.ref_type == 'tag' && github.ref_name) || vars.MITRA_VERSION || 'main' }}
-  VITE_BACKEND_URL_PLACEHOLDER: __PLACEHOLDER_MITRA_BACKEND_URL__
+  MITRA_VERSION: ${{ inputs.mitra_version || (github.ref_type == 'tag' && github.ref_name) || vars.MITRA_VERSION || 'main' }}
+  VITE_BACKEND_URL_PLACEHOLDER: ${{ inputs.vite_backend_url || '__PLACEHOLDER_MITRA_BACKEND_URL__' }}
 
 # ---------------------------------------------------------------------------
 # Job 1 – build
