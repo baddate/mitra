@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [5.7.0] - 2026-07-09
+
 ### Added
 
 - Accept 'ap' URIs with `ap+ef61` scheme.
@@ -15,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added API endpoints for editing group info.
 - Added `group` field to `Status` Mastodon API entity.
 - Implemented FEP-5219 `affiliations` collection.
+- Added `configuration.accounts.max_note_length` field to `Instance` entity.
+- Added `configuration.accounts.max_display_name_length` field to `Instance` entity.
+- Maintain record of the total number of voters in a poll.
+- Add pagination `Link` header to `/api/v1/accounts/{account_id}/subscribers` response.
+- Added `avatar_static` and `header_static` fields to `Account` entity.
 
 ### Changed
 
@@ -28,6 +35,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Fixed full text search not using index.
 - Remove custom emojis that are no longer used in display name or bio.
+- Clear poll results when poll type or poll options are changed.
+- Fixed stack overflow in background worker when optimizations are disabled.
+- Fixed "account not found" error when posting to a remote group.
 
 ## [5.6.0] - 2026-06-26
 
