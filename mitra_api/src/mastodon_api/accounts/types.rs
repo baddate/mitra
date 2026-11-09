@@ -189,7 +189,6 @@ pub struct Account {
     pub locked: bool,
     pub mention_policy: String,
     pub bot: bool,
-    is_group: bool, // not part of Mastodon API
     group_type: Option<&'static str>, // not part of Mastodon API
     discoverable: bool,
     pub identity_proofs: Vec<AccountField>,
@@ -323,7 +322,6 @@ impl Account {
             locked: profile.manually_approves_followers,
             mention_policy: mention_policy.to_string(),
             bot: profile.actor_type == ActorType::Automated,
-            is_group: profile.actor_type == ActorType::Group,
             group_type: maybe_group_type,
             discoverable: true,
             identity_proofs,

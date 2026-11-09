@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Removed `load-replies` command.
 - Removed `/api/v1/statuses/{status_id}/make_permanent` API endpoint.
 - Removed `conversation_tracking` field from `Status` entity.
+- Removed `is_group` field from `Account` entity.
 
 ## [5.13.0] - 2026-11-11
 
