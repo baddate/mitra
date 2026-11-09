@@ -109,14 +109,6 @@ pub fn parse_config(
         let message = "federation.fep_1b12_full_enabled parameter is deprecated";
         warnings.push(message.to_owned());
     };
-    if config.blocked_instances.is_some() {
-        let message = "blocked_instances parameter is deprecated (use `mitra filter add`)";
-        warnings.push(message.to_owned());
-    };
-    if config.allowed_instances.is_some() {
-        let message = "allowed_instances parameter is deprecated (use `mitra filter add`)";
-        warnings.push(message.to_owned());
-    };
     for blockchain_config in config.blockchains() {
         match blockchain_config {
             BlockchainConfig::Monero(MoneroConfig { chain_id, .. }) |

@@ -401,7 +401,7 @@ pub async fn process_queued_outgoing_activities(
     config: &Config,
     db_pool: &DatabaseConnectionPool,
 ) -> Result<(), DatabaseError> {
-    let filter = FederationFilter::init_with_pool(config, db_pool).await?;
+    let filter = FederationFilter::init_with_pool(db_pool).await?;
     let batch = get_job_batch(
         db_client_await!(db_pool),
         JobType::OutgoingActivity,

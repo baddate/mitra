@@ -126,9 +126,6 @@ pub struct Config {
     #[serde(default)]
     pub federation: FederationConfig,
 
-    pub blocked_instances: Option<Vec<String>>,
-    pub allowed_instances: Option<Vec<String>>,
-
     pub metrics: Option<Metrics>,
 
     // Blockchain integrations

@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Changed soft MSRV to 1.93.
 
+### Removed
+
+- Removed `blocked_instances` and `allowed_instances` configuration options.
+
 ## [5.13.0] - 2026-11-11
 
 ### Added

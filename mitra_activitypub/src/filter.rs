@@ -1,7 +1,6 @@
 use apx_core::url::http_uri::Hostname;
 use wildmatch::WildMatch;
 
-use mitra_config::Config;
 use mitra_models::{
     database::{
         get_database_client,
@@ -34,48 +33,24 @@ pub fn get_moderation_domain(
     Ok(hostname)
 }
 
-fn is_hostname_allowed(
-    blocklist: &[String],
-    allowlist: &[String],
-    hostname: &str,
-) -> bool {
-    if blocklist.iter()
-        .any(|blocked| WildMatch::new(blocked).matches(hostname))
-    {
-        // Blocked, checking allowlist
-        allowlist.iter()
-            .any(|allowed| WildMatch::new(allowed).matches(hostname))
-    } else {
-        true
-    }
-}
-
 #[derive(Clone)]
 pub struct FederationFilter {
-    blocklist: Vec<String>,
-    allowlist: Vec<String>,
     rules: Vec<FilterRule>,
 }
 
 impl FederationFilter {
     pub async fn init(
-        config: &Config,
         db_client: &impl DatabaseClient,
     ) -> Result<Self, DatabaseError> {
         let rules = get_filter_rules(db_client).await?;
-        Ok(Self {
-            blocklist: config.blocked_instances.clone().unwrap_or_default(),
-            allowlist: config.allowed_instances.clone().unwrap_or_default(),
-            rules,
-        })
+        Ok(Self { rules })
     }
 
     pub async fn init_with_pool(
-        config: &Config,
         db_pool: &DatabaseConnectionPool,
     ) -> Result<Self, DatabaseError> {
         let db_client = &**get_database_client(db_pool).await?;
-        Self::init(config, db_client).await
+        Self::init(db_client).await
     }
 
     pub fn is_action_required(
@@ -85,14 +60,6 @@ impl FederationFilter {
     ) -> bool {
         // Rules are checked in order. The last matching rule wins.
         let mut is_required = false;
-        // Blocklist and allowlist have lower priority than filter rules
-        if action == FilterAction::RejectIncoming {
-            is_required = !is_hostname_allowed(
-                &self.blocklist,
-                &self.allowlist,
-                hostname,
-            );
-        };
         let applicable_rules = self.rules.iter()
             .filter(|rule| WildMatch::new(&rule.target).matches(hostname))
             .filter(|rule| rule.filter_action == action);
@@ -118,43 +85,12 @@ mod tests {
     };
     use super::*;
 
-    #[test]
-    fn test_is_hostname_allowed() {
-        let blocklist = vec!["bad.example".to_string()];
-        let allowlist = vec![];
-        let result = is_hostname_allowed(&blocklist, &allowlist, "social.example");
-        assert_eq!(result, true);
-        let result = is_hostname_allowed(&blocklist, &allowlist, "bad.example");
-        assert_eq!(result, false);
-    }
-
-    #[test]
-    fn test_is_hostname_allowed_wildcard() {
-        let blocklist = vec!["*.eu".to_string()];
-        let allowlist = vec![];
-        let result = is_hostname_allowed(&blocklist, &allowlist, "social.example");
-        assert_eq!(result, true);
-        let result = is_hostname_allowed(&blocklist, &allowlist, "social.eu");
-        assert_eq!(result, false);
-    }
-
-    #[test]
-    fn test_is_hostname_allowed_allowlist() {
-        let blocklist = vec!["*".to_string()];
-        let allowlist = vec!["social.example".to_string()];
-        let result = is_hostname_allowed(&blocklist, &allowlist, "social.example");
-        assert_eq!(result, true);
-        let result = is_hostname_allowed(&blocklist, &allowlist, "other.example");
-        assert_eq!(result, false);
-    }
-
     #[tokio::test]
     #[serial]
     async fn test_federation_filter() {
         let db_client = &create_test_database().await;
         let target_1 = "*";
         let target_2 = "one.example";
-        let target_3 = "two.example";
         add_filter_rule(
             db_client,
             target_1,
@@ -169,11 +105,7 @@ mod tests {
         ).await.unwrap();
         let rules = get_filter_rules(db_client).await.unwrap();
 
-        let filter = FederationFilter {
-            blocklist: vec![],
-            allowlist: vec![target_3.to_string()], // overridden
-            rules,
-        };
+        let filter = FederationFilter { rules };
         assert_eq!(filter.is_incoming_blocked("one.example"), false);
         assert_eq!(filter.is_incoming_blocked("two.example"), true);
         assert_eq!(filter.is_incoming_blocked("any.example"), true);

@@ -7,3 +7,7 @@ If you're using Mitra 4.x, read the [Mitra 5.0 migration guide](./mitra_5_0.md).
 ## Dependencies
 
 - Minimum supported version of Rust is 1.93.
+
+## Configuration
+
+- Removed `blocked_instances` and `allowed_instances` configuration options. Use `filter` commands to manage block/allowlists.

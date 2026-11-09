@@ -184,7 +184,7 @@ impl ApClient {
     ) -> Result<Self, DatabaseError> {
         let ap_client = Self {
             instance: config.instance(),
-            filter: FederationFilter::init(config, db_client).await?,
+            filter: FederationFilter::init(db_client).await?,
             limits: config.limits.clone(),
             media_storage: MediaStorage::new(config),
             as_user: None,
