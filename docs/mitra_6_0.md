@@ -15,3 +15,4 @@ If you're using Mitra 4.x, read the [Mitra 5.0 migration guide](./mitra_5_0.md).
 ## CLI
 
 - Removed `load-replies` command. Use `/api/v1/statuses/{status_id}/load_conversation` API endpoint or `ap import` command.
+- Changed `ap fetch` command to not verify fetched object by default. Verification can be enabled with `--verify` flag.

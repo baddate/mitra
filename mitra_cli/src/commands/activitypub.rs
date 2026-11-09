@@ -176,7 +176,7 @@ impl ImportObject {
     }
 }
 
-/// Fetch object as local actor, verify and print it to stdout
+/// Fetch object as local actor and print it to stdout
 #[derive(Parser)]
 pub struct FetchObject {
     object_id: String,
@@ -187,8 +187,9 @@ pub struct FetchObject {
     /// Set custom `User-Agent` header
     #[arg(long)]
     user_agent: Option<String>,
+    /// Verify Content-Type and origin after fetching?
     #[arg(long)]
-    skip_verification: bool,
+    verify: bool,
     /// Verify FEP-8b32 proof after fetching?
     #[arg(long)]
     verify_proof: bool,
@@ -224,14 +225,13 @@ impl FetchObject {
         let mut context = FetcherContext::from(gateways);
         let object_id = context.prepare_object_id(&self.object_id)?;
         let options = FetchObjectOptions {
-            skip_content_type_verification: self.skip_verification,
+            skip_content_type_verification: !self.verify,
         };
         let object = ap_client.fetch_object_raw(
             &object_id,
             options,
         ).await?;
-        // TODO: don't verify by default
-        if !self.skip_verification {
+        if self.verify {
             if self.verify_proof {
                 // Verifies integrity proofs on all objects
                 verify_signed_fetched_object(
