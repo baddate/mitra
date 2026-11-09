@@ -119,6 +119,7 @@ pub fn parse_config(
             },
         };
     };
+    #[expect(deprecated)]
     if config.ipfs_api_url.is_some() != config.ipfs_gateway_url.is_some() {
         panic!("both ipfs_api_url and ipfs_gateway_url must be set");
     };

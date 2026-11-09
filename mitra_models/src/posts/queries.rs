@@ -1601,6 +1601,7 @@ pub async fn update_repost_count(
     Ok(())
 }
 
+#[deprecated]
 pub async fn set_post_ipfs_cid(
     db_client: &mut impl DatabaseClient,
     post_id: Uuid,

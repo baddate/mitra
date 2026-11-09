@@ -28,7 +28,6 @@ use mitra_activitypub::{
         add_note::prepare_add_note,
         create_note::prepare_create_note,
         like::prepare_like,
-        note::build_note,
         remove_note::prepare_remove_note,
         undo_announce::prepare_undo_announce,
         undo_like::prepare_undo_like,
@@ -56,7 +55,6 @@ use mitra_models::{
     },
     polls::types::{PollData, PollResult},
     posts::helpers::{
-        add_related_posts,
         add_user_actions,
         can_create_post,
         get_post_by_id_for_view,
@@ -71,7 +69,6 @@ use mitra_models::{
         get_repost_by_author,
         get_thread,
         set_pinned_flag,
-        set_post_ipfs_cid,
         update_post,
     },
     posts::types::{
@@ -92,10 +89,7 @@ use mitra_models::{
     },
     reactions::types::{ReactionData, ReactionDetailed},
 };
-use mitra_services::{
-    ipfs::{store as ipfs_store},
-    media::{MediaServer, MediaStorage},
-};
+use mitra_services::media::MediaServer;
 use mitra_validators::{
     errors::ValidationError,
     posts::{
@@ -1302,73 +1296,6 @@ async fn conversation_tracking_view(
     Ok(HttpResponse::Ok().json(status))
 }
 
-#[post("/{status_id}/make_permanent")]
-async fn make_permanent(
-    auth: BearerAuth,
-    config: web::Data<Config>,
-    connection_info: ConnectionInfo,
-    db_pool: web::Data<DatabaseConnectionPool>,
-    status_id: web::Path<Uuid>,
-) -> Result<HttpResponse, MastodonError> {
-    let db_client = &mut **get_database_client(&db_pool).await?;
-    let current_user = get_current_user(db_client, auth.token()).await?;
-    let mut post = get_post_by_id(db_client, *status_id).await?;
-    if post.ipfs_cid.is_some() {
-        return Err(MastodonError::OperationError("post already saved to IPFS"));
-    };
-    if post.author.id != current_user.id || !post.is_public() {
-        // Users can only archive their own public posts
-        return Err(MastodonError::PermissionError);
-    };
-    add_related_posts(db_client, vec![&mut post]).await?;
-    let ipfs_api_url = config.ipfs_api_url.as_ref()
-        .ok_or(MastodonError::NotSupported)?;
-    let media_storage = MediaStorage::new(&config);
-
-    let mut attachments = vec![];
-    for attachment in post.attachments.iter_mut() {
-        // Add attachment to IPFS
-        let image_data = media_storage
-            .read_file(&attachment.media.expect_file_info().file_name)
-            .map_err(MastodonError::from_internal)?;
-        let image_cid = ipfs_store::add(ipfs_api_url, image_data).await
-            .map_err(MastodonError::from_internal)?;
-        attachment.ipfs_cid = Some(image_cid.clone());
-        attachments.push((attachment.id, image_cid));
-    };
-    assert!(post.is_local());
-    let instance = config.instance();
-    let authority = Authority::server(instance.uri());
-    let media_server = MediaServer::new(&config);
-    let note = build_note(
-        &instance.webfinger_hostname(),
-        &authority,
-        &media_server,
-        &post,
-        true,
-    );
-    let post_metadata = serde_json::to_value(note)
-        .expect("object should be serializable");
-    let post_metadata_json = post_metadata.to_string().as_bytes().to_vec();
-    let post_metadata_cid = ipfs_store::add(ipfs_api_url, post_metadata_json).await
-        .map_err(MastodonError::from_internal)?;
-
-    set_post_ipfs_cid(db_client, post.id, &post_metadata_cid, attachments).await?;
-    post.ipfs_cid = Some(post_metadata_cid);
-
-    let base_url = get_request_base_url(connection_info);
-    let authority = Authority::from(&config.instance());
-    let media_server = ClientMediaServer::new(&config, &base_url);
-    let status = build_status(
-        db_client,
-        &authority,
-        &media_server,
-        Some(&current_user),
-        post,
-    ).await?;
-    Ok(HttpResponse::Ok().json(status))
-}
-
 #[post("/{status_id}/load_conversation")]
 async fn load_conversation(
     auth: BearerAuth,
@@ -1455,6 +1382,5 @@ pub fn status_api_scope() -> Scope {
         .service(bookmark_view)
         .service(unbookmark_view)
         .service(conversation_tracking_view)
-        .service(make_permanent)
         .service(load_conversation)
 }

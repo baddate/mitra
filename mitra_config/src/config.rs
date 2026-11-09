@@ -133,7 +133,9 @@ pub struct Config {
     blockchains: Vec<BlockchainConfig>,
 
     // IPFS
+    #[deprecated]
     pub ipfs_api_url: Option<String>,
+    #[deprecated]
     pub ipfs_gateway_url: Option<String>,
 
     // Fields that are populated during init phase

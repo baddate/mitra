@@ -273,7 +273,6 @@ pub struct InstanceInfo {
     federated_timeline_restricted: bool, // from dynamic config
 
     blockchains: Vec<BlockchainInfo>,
-    ipfs_gateway_url: Option<String>,
 
     // Custom field, used by Husky
     max_toot_chars: usize,
@@ -350,7 +349,6 @@ impl InstanceInfo {
             blockchains: config.blockchains().iter()
                 .map(BlockchainInfo::from)
                 .collect(),
-            ipfs_gateway_url: config.ipfs_gateway_url.clone(),
             max_toot_chars: config.limits.posts.character_limit,
             pleroma: PleromaInfo {
                 metadata: PleromaMetadata::new(),
@@ -424,7 +422,6 @@ pub struct InstanceInfoV2 {
     like_emoji: String,
     favorite_emojis: Vec<String>,
     blockchains: Vec<BlockchainInfo>,
-    ipfs_gateway_url: Option<String>,
 
     pleroma: PleromaInfo,
 }
@@ -513,7 +510,6 @@ impl InstanceInfoV2 {
             blockchains: config.blockchains().iter()
                 .map(BlockchainInfo::from)
                 .collect(),
-            ipfs_gateway_url: config.ipfs_gateway_url.clone(),
             pleroma: PleromaInfo {
                 metadata: PleromaMetadata::new(),
             },

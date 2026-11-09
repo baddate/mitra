@@ -169,7 +169,6 @@ pub struct Status {
     // Custom fields
     title: Option<String>,
     hidden: bool,
-    pub ipfs_cid: Option<String>,
     links: Vec<Status>,
     group: Option<Account>,
     conversation: Option<StatusConversation>,
@@ -359,7 +358,6 @@ impl Status {
                 quote: maybe_quoted_status,
             },
             hidden: post.actions.is_some_and(|actions| actions.hidden),
-            ipfs_cid: post.ipfs_cid,
             links: links,
             group: maybe_group,
             conversation: maybe_conversation,

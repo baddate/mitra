@@ -3,6 +3,7 @@ use mitra_models::{
     database::{DatabaseClient, DatabaseError},
     media::types::DeletionQueue,
 };
+#[expect(deprecated)]
 use mitra_services::{
     ipfs::{store as ipfs_store},
     media::MediaStorage,
@@ -30,6 +31,7 @@ async fn delete_media(
         let storage = MediaStorage::new(config);
         delete_files(&storage, &queue.files);
     };
+    #[expect(deprecated)]
     if !queue.ipfs_objects.is_empty() {
         match &config.ipfs_api_url {
             Some(ipfs_api_url) => {
