@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Changed `ap fetch` command to not verify fetched object by default.
 - Changed the default value for `use_context` parameter to `true` in `/api/v1/statuses/{status_id}/load_conversation` API method.
 - Made `client_id` and `client_secret` parameters required when calling `/oauth/token`.
+- Enabled verification of requested OAuth scopes against application scopes.
 
 ### Removed
 

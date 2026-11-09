@@ -121,7 +121,7 @@ async fn authorize_view(
         log::warn!("unsupported scopes: {:?}", unsupported_scopes);
     };
     if !verify_scopes(&supported_scopes, &oauth_app.scopes) {
-        log::warn!("requested scopes are not a subset of app scopes");
+        return Err(ValidationError("requested scopes are not a subset of app scopes").into());
     };
 
     let authorization_code = generate_oauth_token();
@@ -285,7 +285,7 @@ async fn token_view(
     log::info!("requested token with scopes: {:?}", scopes);
     // Not necessary for `authorization_code` grant type
     if !verify_scopes(&scopes, &oauth_app.scopes) {
-        log::warn!("requested token scopes are not a subset of app scopes");
+        return Err(ValidationError("requested token scopes are not a subset of app scopes").into());
     };
     let access_token = generate_oauth_token();
     let created_at = Utc::now();

@@ -30,7 +30,7 @@ paths:
             format: uri
         - name: scope
           in: query
-          description: Has no effect (scopes are not supported).
+          description: List of requested OAuth scopes, separated by pluses. Must be a subset of scopes declared during app registration.
           required: true
           schema:
             type: string
@@ -88,9 +88,9 @@ paths:
                   nullable: true
                   example: null
                 scope:
-                  description: Has no effect (scopes are not supported).
+                  description: When `grant_type` is not `authorization_cod`, the list of requested OAuth scopes, separated by spaces. Must be a subset of the scopes requested at the time the application was created.
                   type: string
-                  example: null
+                  example: "read write"
               required:
                 - grant_type
                 - client_id
