@@ -181,24 +181,14 @@ async fn token_view(
         Either::Right(form) => form.into_inner().into(),
     };
     let db_client = &**get_database_client(&db_pool).await?;
-    let maybe_oauth_app = if let Some(client_id) = request_data.client_id {
-        let oauth_app = match get_oauth_app_by_client_id(db_client, client_id).await {
-            Ok(app) => app,
-            Err(DatabaseError::NotFound(_)) =>
-                return Err(MastodonError::AuthError("invalid client credentials")),
-            Err(other_error) => return Err(other_error.into()),
-        };
-        if let Some(client_secret) = request_data.client_secret {
-            if client_secret != oauth_app.client_secret {
-                log::warn!("incorrect client secret");
-            };
-        } else {
-            log::warn!("client secret is not provided");
-        };
-        Some(oauth_app)
-    } else {
-        log::warn!("client ID is not provided");
-        None
+    let oauth_app = match get_oauth_app_by_client_id(db_client, request_data.client_id).await {
+        Ok(app) => app,
+        Err(DatabaseError::NotFound(_)) =>
+            return Err(MastodonError::AuthError("invalid client credentials")),
+        Err(other_error) => return Err(other_error.into()),
+    };
+    if request_data.client_secret != oauth_app.client_secret {
+        return Err(MastodonError::AuthError("incorrect client secret"));
     };
     let scopes = request_data.scope.unwrap_or_default();
     let (supported_scopes, unsupported_scopes) = clean_scopes(&scopes);
@@ -210,13 +200,11 @@ async fn token_view(
             // https://www.rfc-editor.org/rfc/rfc6749#section-4.1.3
             let authorization_code = request_data.code.as_ref()
                 .ok_or(ValidationError("authorization code is required"))?;
-            let client_id = request_data.client_id
-                .ok_or(ValidationError("client ID is required"))?;
             // Scopes provided in the request data are ignored and
             // scopes associated with the authorization are used instead.
             get_user_by_authorization_code(
                 db_client,
-                client_id,
+                request_data.client_id,
                 authorization_code,
             ).await?
         },
@@ -295,11 +283,9 @@ async fn token_view(
         },
     };
     log::info!("requested token with scopes: {:?}", scopes);
-    if let Some(ref oauth_app) = maybe_oauth_app {
-        // Not necessary for `authorization_code` grant type
-        if !verify_scopes(&scopes, &oauth_app.scopes) {
-            log::warn!("requested token scopes are not a subset of app scopes");
-        };
+    // Not necessary for `authorization_code` grant type
+    if !verify_scopes(&scopes, &oauth_app.scopes) {
+        log::warn!("requested token scopes are not a subset of app scopes");
     };
     let access_token = generate_oauth_token();
     let created_at = Utc::now();
@@ -308,16 +294,16 @@ async fn token_view(
     save_oauth_token(
         db_client,
         user.id,
-        maybe_oauth_app.as_ref().map(|app| app.id),
+        oauth_app.id,
         &scopes,
         &access_token,
         created_at,
         expires_at,
     ).await?;
     log::warn!(
-        "created auth token for user {} (client: {:?})",
+        "created auth token for user {} (client: {})",
         user,
-        maybe_oauth_app.map(|app| app.app_name),
+        oauth_app.app_name,
     );
     let token_data = TokenResponse::new(
         access_token,

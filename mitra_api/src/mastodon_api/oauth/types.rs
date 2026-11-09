@@ -26,8 +26,8 @@ pub struct TokenRequest {
     pub code: Option<String>,
     #[expect(dead_code)]
     pub redirect_uri: Option<String>,
-    pub client_id: Option<Uuid>,
-    pub client_secret: Option<String>,
+    pub client_id: Uuid,
+    pub client_secret: String,
 
     // May be provided when grant type is "client_credentials"
     pub scope: Option<String>,
@@ -48,8 +48,8 @@ pub struct TokenRequestMultipartForm {
     // Required if grant type is "authorization_code"
     code: Option<Text<String>>,
     redirect_uri: Option<Text<String>>,
-    client_id: Option<Text<Uuid>>,
-    client_secret: Option<Text<String>>,
+    client_id: Text<Uuid>,
+    client_secret: Text<String>,
 
     // May be provided when grant type is "client_credentials"
     scope: Option<Text<String>>,
@@ -65,8 +65,8 @@ impl From<TokenRequestMultipartForm> for TokenRequest {
             grant_type: form.grant_type.into_inner(),
             code: form.code.map(|value| value.into_inner()),
             redirect_uri: form.redirect_uri.map(|value| value.into_inner()),
-            client_id: form.client_id.map(|value| value.into_inner()),
-            client_secret: form.client_secret.map(|value| value.into_inner()),
+            client_id: form.client_id.into_inner(),
+            client_secret: form.client_secret.into_inner(),
             scope: form.scope.map(|value| value.into_inner()),
             username: form.username.map(|value| value.into_inner()),
             password: form.password.map(|value| value.into_inner()),

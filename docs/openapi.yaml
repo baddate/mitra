@@ -55,6 +55,13 @@ paths:
                     - eip4361
                     - caip122_monero
                   example: authorization_code
+                client_id:
+                  description: The client ID, obtained during app registration.
+                  type: string
+                  format: uuid
+                client_secret:
+                  description: The client secret, obtained during app registration.
+                  type: string
                 code:
                   description: A user authorization code, obtained via GET /oauth/authorize (required if grant type is "authorization_code").
                   type: string
@@ -86,6 +93,8 @@ paths:
                   example: null
               required:
                 - grant_type
+                - client_id
+                - client_secret
       responses:
         200:
           description: Successful operation

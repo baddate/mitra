@@ -133,7 +133,7 @@ pub async fn get_user_by_authorization_code(
 pub async fn save_oauth_token(
     db_client: &impl DatabaseClient,
     owner_id: Uuid,
-    maybe_app_id: Option<i32>,
+    app_id: i32,
     scopes: &[String],
     token: &str,
     created_at: DateTime<Utc>,
@@ -155,7 +155,7 @@ pub async fn save_oauth_token(
         ",
         &[
             &owner_id,
-            &maybe_app_id,
+            &app_id,
             &scopes,
             &token_digest,
             &created_at,
@@ -344,7 +344,7 @@ mod tests {
         save_oauth_token(
             db_client,
             user.id,
-            Some(app.id),
+            app.id,
             &["read".to_owned(), "write".to_owned()],
             token,
             Utc::now(),
@@ -388,7 +388,7 @@ mod tests {
         let token_id = save_oauth_token(
             db_client,
             user.id,
-            Some(app.id),
+            app.id,
             &["read".to_owned()],
             token,
             Utc::now(),
