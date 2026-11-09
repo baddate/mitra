@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Removed `blocked_instances` and `allowed_instances` configuration options.
 - Removed `load-replies` command.
 - Removed `/api/v1/statuses/{status_id}/make_permanent` API endpoint.
+- Removed `conversation_tracking` field from `Status` entity.
 
 ## [5.13.0] - 2026-11-11
 

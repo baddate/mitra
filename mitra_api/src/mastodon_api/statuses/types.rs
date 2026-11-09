@@ -172,9 +172,6 @@ pub struct Status {
     links: Vec<Status>,
     group: Option<Account>,
     conversation: Option<StatusConversation>,
-
-    // Custom fields: authenticated user
-    conversation_tracking: Option<&'static str>,
 }
 
 pub fn visibility_to_str(visibility: Visibility) -> &'static str {
@@ -344,8 +341,6 @@ impl Status {
             favourited: post.actions.as_ref().is_some_and(|actions| actions.liked),
             reblogged: post.actions.as_ref().is_some_and(|actions| actions.reposted),
             bookmarked: post.actions.as_ref().is_some_and(|actions| actions.bookmarked),
-            conversation_tracking: post.actions.as_ref()
-                .map(|actions| tracking_status_to_str(actions.conversation_tracking_status)),
             pleroma: PleromaData {
                 emoji_reactions,
                 in_reply_to_account_acct: related_posts

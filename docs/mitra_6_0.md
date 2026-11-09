@@ -20,3 +20,4 @@ If you're using Mitra 4.x, read the [Mitra 5.0 migration guide](./mitra_5_0.md).
 ## HTTP API
 
 - Removed `/api/v1/statuses/{status_id}/make_permanent` API endpoint ("Save to IPFS").
+- Removed `conversation_tracking` field from `Status` entity. Use `conversation.tracking` instead.
