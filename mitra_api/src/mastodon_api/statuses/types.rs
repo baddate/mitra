@@ -619,9 +619,11 @@ impl ConversationTrackingForm {
     }
 }
 
+const fn default_use_context() -> bool { true }
+
 #[derive(Deserialize)]
 pub struct LoadConversationRequest {
-    #[serde(default)]
+    #[serde(default = "default_use_context")]
     pub use_context: bool,
 }
 

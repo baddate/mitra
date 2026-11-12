@@ -22,3 +22,4 @@ If you're using Mitra 4.x, read the [Mitra 5.0 migration guide](./mitra_5_0.md).
 - Removed `/api/v1/statuses/{status_id}/make_permanent` API endpoint ("Save to IPFS").
 - Removed `conversation_tracking` field from `Status` entity. Use `conversation.tracking` instead.
 - Removed `is_group` field from `Account` entity. Use `group_type` instead.
+- Changed the default value for `use_context` parameter to `true` in `/api/v1/statuses/{status_id}/load_conversation` API method.
