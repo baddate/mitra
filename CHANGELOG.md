@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Changed soft MSRV to 1.93.
+- Set minimum migration version to 106.
 
 ### Removed
 

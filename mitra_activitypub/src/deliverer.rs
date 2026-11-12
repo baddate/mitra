@@ -194,7 +194,6 @@ pub struct Recipient {
     // HTTP URI of inbox/outbox endpoint
     pub inbox: String,
 
-    #[serde(default)]
     pub is_primary: bool,
 
     pub is_delivered: bool,
@@ -204,7 +203,6 @@ pub struct Recipient {
     pub is_unreachable: bool,
 
     // This flag is set if inbox is 410 Gone
-    #[serde(default)]
     pub is_gone: bool,
 }
 
