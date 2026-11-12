@@ -1029,7 +1029,7 @@ pub async fn import_featured(
 }
 
 // https://codeberg.org/silverpill/feps/src/branch/main/f228/fep-f228.md
-pub async fn import_replies(
+pub(crate) async fn import_replies(
     config: &Config,
     db_pool: &DatabaseConnectionPool,
     object_id: &str,

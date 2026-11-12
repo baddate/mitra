@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Removed
 
 - Removed `blocked_instances` and `allowed_instances` configuration options.
+- Removed `load-replies` command.
 
 ## [5.13.0] - 2026-11-11
 

@@ -11,3 +11,7 @@ If you're using Mitra 4.x, read the [Mitra 5.0 migration guide](./mitra_5_0.md).
 ## Configuration
 
 - Removed `blocked_instances` and `allowed_instances` configuration options. Use `filter` commands to manage block/allowlists.
+
+## CLI
+
+- Removed `load-replies` command. Use `/api/v1/statuses/{status_id}/load_conversation` API endpoint or `ap import` command.

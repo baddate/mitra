@@ -24,7 +24,6 @@ use crate::commands::{
         FetchObject,
         ImportObject,
         LoadPortableObject,
-        LoadReplies,
         SendActivity,
         Webfinger,
     },
@@ -207,8 +206,6 @@ pub enum Command {
     InstanceReport(InstanceReport),
 
     // Deprecated commands (no alias in groups)
-    #[command(hide = true, alias = "fetch-replies")]
-    LoadReplies(LoadReplies),
     #[command(hide = true)]
     LoadPortableObject(LoadPortableObject),
     #[command(hide = true)]

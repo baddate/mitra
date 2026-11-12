@@ -108,7 +108,6 @@ async fn run_async() -> Result<(), Error> {
         Command::SetRole(cmd) => cmd.execute(&db_pool).await,
         Command::RevokeOauthTokens(cmd) => cmd.execute(&db_pool).await,
         Command::ImportObject(cmd) => cmd.execute(&config, &db_pool).await,
-        Command::LoadReplies(cmd) => cmd.execute(&config, &db_pool).await,
         Command::FetchObject(cmd) => cmd.execute(&config, &db_pool).await,
         Command::Webfinger(cmd) => cmd.execute(&config, &db_pool).await,
         Command::LoadPortableObject(cmd) => cmd.execute(&config, &db_pool).await,

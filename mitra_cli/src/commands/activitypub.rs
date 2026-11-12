@@ -39,7 +39,6 @@ use mitra_activitypub::{
         import_actor,
         import_collection,
         import_object,
-        import_replies,
         ApClient,
         CollectionItemType,
         CollectionOrder,
@@ -173,33 +172,6 @@ impl ImportObject {
             },
             _ => return Err(anyhow!("invalid object type")),
         };
-        Ok(())
-    }
-}
-
-/// Load replies from 'replies' or 'context' collection
-#[derive(Parser)]
-pub struct LoadReplies {
-    object_id: String,
-    #[arg(long, default_value_t = 20)]
-    limit: usize,
-    #[arg(long)]
-    use_context: bool,
-}
-
-impl LoadReplies {
-    pub async fn execute(
-        self,
-        config: &Config,
-        db_pool: &DatabaseConnectionPool,
-    ) -> Result<(), Error> {
-        import_replies(
-            config,
-            db_pool,
-            &self.object_id,
-            self.use_context,
-            self.limit,
-        ).await?;
         Ok(())
     }
 }
