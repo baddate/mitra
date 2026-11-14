@@ -25,3 +25,7 @@ If you're using Mitra 4.x, read the [Mitra 5.0 migration guide](./mitra_5_0.md).
 - Changed the default value for `use_context` parameter to `true` in `/api/v1/statuses/{status_id}/load_conversation` API method.
 - Made `client_id` and `client_secret` parameters required when calling `/oauth/token`.
 - Enabled verification of requested OAuth scopes against application scopes.
+
+## Client
+
+- Removed "Save to IPFS" feature.
