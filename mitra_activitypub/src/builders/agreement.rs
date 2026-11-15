@@ -99,7 +99,7 @@ pub fn build_agreement(
     );
     let agreement_id = local_agreement_id(instance_uri, invoice.id);
     let amount = invoice.amount_u64()?;
-    let duration = amount / payment_info.price.get();
+    let duration = amount / payment_info.price;
     let primary_commitment = Commitment {
         id: Some(fep_0837_primary_fragment_id(&agreement_id)),
         object_type: COMMITMENT.to_string(),

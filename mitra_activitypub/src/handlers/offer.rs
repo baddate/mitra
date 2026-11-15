@@ -75,7 +75,7 @@ pub async fn handle_offer(
         .parse_duration()?;
     let amount: u64 = reciprocal_commitment.resource_quantity
         .parse_currency_amount()?;
-    let expected_duration = amount / subscription_option.price.get();
+    let expected_duration = amount / subscription_option.price;
     if duration != expected_duration {
         return Err(ValidationError("invalid duration").into());
     };
