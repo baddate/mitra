@@ -46,7 +46,7 @@ apx_core = { path = "../apx_core", features = ["experiments"] }
 mitra_utils = { path = "../mitra_utils" }
 
 [dev-dependencies]
-serial_test = "3.0.0"
+serial_test = "3.5.0"
 # [tokio::test]
 tokio = { version = "1.38.0", features = ["macros"] }
 

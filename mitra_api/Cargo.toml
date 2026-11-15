@@ -65,7 +65,7 @@ mitra_validators = { path = "../mitra_validators" }
 mitra_workers = { path = "../mitra_workers" }
 
 [dev-dependencies]
-serial_test = "3.0.0"
+serial_test = "3.5.0"
 
 apx_core = { path = "../apx_core", features = ["test-utils"] }
 mitra_config = { path = "../mitra_config", features = ["test-utils"] }
