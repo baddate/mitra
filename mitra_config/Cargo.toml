@@ -27,7 +27,6 @@ thiserror = "2.0.18"
 toml = "0.9.6"
 
 apx_core = { path = "../apx_core" }
-mitra_utils = { path = "../mitra_utils" }
 
 [dev-dependencies]
 apx_core = { path = "../apx_core", features = ["test-utils"] }
