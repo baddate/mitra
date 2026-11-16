@@ -55,3 +55,24 @@ pub fn get_payment_id(address: Address) -> Option<PaymentId> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_monero_address() {
+        let address_str = "888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H";
+        let address = parse_monero_address(address_str).unwrap();
+        assert_eq!(address.to_string(), address_str);
+        assert_eq!(address.network, Network::Mainnet);
+        assert_eq!(address.addr_type, AddressType::SubAddress);
+    }
+
+    #[test]
+    fn test_parse_monero_view_key() {
+        let key_str = "77916d0cd56ed1920aef6ca56d8a41bac915b68e4c46a589e0956e27a7b77404";
+        let key = parse_monero_view_key(key_str).unwrap();
+        assert_eq!(key.to_string(), key_str);
+    }
+}
