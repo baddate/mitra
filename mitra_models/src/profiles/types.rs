@@ -817,15 +817,11 @@ impl DbActorProfile {
         check_payment_options(self.payment_options.inner(), origin)?;
         if self.is_local() {
             // Related media must be stored locally
-            if let Some(ref avatar) = self.avatar {
-                if !avatar.is_file() {
-                    return Err(DatabaseTypeError);
-                };
+            if let Some(ref avatar) = self.avatar && !avatar.is_file() {
+                return Err(DatabaseTypeError);
             };
-            if let Some(ref banner) = self.banner {
-                if !banner.is_file() {
-                    return Err(DatabaseTypeError);
-                };
+            if let Some(ref banner) = self.banner && !banner.is_file() {
+                return Err(DatabaseTypeError);
             };
             if !self.emojis.inner().iter().all(|emoji| emoji.image.is_file())
             {

@@ -38,11 +38,12 @@ version = "6.0.1-dev"
 license = "AGPL-3.0-only"
 
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.89.0"
 
 publish = false
 
 [workspace.lints.clippy]
+collapsible_if = "allow"
 derivable_impls = "allow"
 derive_partial_eq_without_eq = "allow"
 len_zero = "allow"
