@@ -72,7 +72,7 @@ fn web_client_service(web_client_dir: &Path) -> Files {
                     let response = HttpResponse::NotFound().finish();
                     return Ok(ServiceResponse::new(request, response));
                 };
-                let index_file = NamedFile::open_async(index_path).await?;
+                let index_file = NamedFile::open(index_path)?;
                 let response = index_file.into_response(&request);
                 Ok(ServiceResponse::new(request, response))
             }

@@ -4,8 +4,6 @@ use std::path::Path;
 
 use actix_cors::{Cors, CorsError};
 use actix_web::{
-    dev::Service,
-    http::{header as http_header},
     middleware::{
         ErrorHandlers,
         ErrorHandlerResponse,
@@ -109,19 +107,6 @@ pub async fn run_server(
                     Ok(ErrorHandlerResponse::Response(response.map_into_left_body()))
                 })
             )
-            .wrap_fn(|request, service| {
-                // Fix for https://github.com/actix/actix-web/issues/3191
-                let path = request.path().to_owned();
-                let fut = service.call(request);
-                async move {
-                    let mut response = fut.await?;
-                    if path.starts_with(FilesystemServer::BASE_PATH) {
-                        response.headers_mut()
-                            .remove(http_header::CONTENT_ENCODING);
-                    };
-                    Ok(response)
-                }
-            })
             .wrap(create_default_headers_middleware())
             .wrap(ActixLogger::new("%r : %s : %{r}a"))
             .app_data(web::PayloadConfig::default().limit(payload_size_limit))
