@@ -19,6 +19,8 @@ actix-web = { version = "~4.12.0", default-features = false, features = ["compat
   actix-governor = { git = "https://github.com/silverpill/actix-governor", rev = "68183543e26464dda0cc6994864e2bec2131b584" }
   actix-multipart = { version = "0.7.2", default-features = false, features = ["derive"] }
   actix-web-httpauth = "0.8.2"
+  # Not used directly; includes fixes for security issues
+  actix-http = "3.21.3"
 # Used for working with dates
 chrono = { version = "0.4.34", default-features = false, features = ["std", "serde"] }
 # Used to parse emoji shortcodes
