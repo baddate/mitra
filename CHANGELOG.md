@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+
+- Don't panic when monero-lws returns unexpected HTTP code.
+
 ## [6.0.0] - 2026-11-14
 
 ### Changed

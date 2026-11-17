@@ -2301,8 +2301,8 @@ dependencies = [
 
 [[package]]
 name = "monero-lws"
-version = "0.3.0"
-source = "git+https://github.com/silverpill/monero-lws-rs?rev=0ef44084b5115434188a5870d6f0f9e3efc20b8c#0ef44084b5115434188a5870d6f0f9e3efc20b8c"
+version = "0.4.0"
+source = "git+https://github.com/silverpill/monero-lws-rs?rev=b5b9475cbad9eed9b0f42bf320bf6883e0539ccf#b5b9475cbad9eed9b0f42bf320bf6883e0539ccf"
 dependencies = [
  "anyhow",
  "fixed-hash",
@@ -2314,7 +2314,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "uuid",
 ]
 
 [[package]]

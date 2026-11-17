@@ -261,7 +261,7 @@ async fn register_subscription_option(
                 monero_config,
                 payout_address,
                 view_key,
-            );
+            ).map_err(MastodonError::from_internal)?;
             lw_client.login().await
                 .map_err(MastodonError::from_internal)?;
             log::info!("successful LWS login with {payout_address}");

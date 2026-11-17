@@ -35,11 +35,12 @@ impl LightWalletClient {
         config: &MoneroLightConfig,
         address: Address,
         view_key: PrivateKey,
-    ) -> Self {
+    ) -> Result<Self, LightWalletError> {
         let client = LwsRpcClientBuilder::new()
             .timeout(REQUEST_TIMEOUT)
-            .build(config.lightwallet_api_url.clone());
-        Self { client, address, view_key }
+            .build(config.lightwallet_api_url.clone())?;
+        let client = Self { client, address, view_key };
+        Ok(client)
     }
 
     // https://github.com/monero-project/meta/blob/master/api/lightwallet_rest.md#get_address_txs

@@ -564,7 +564,7 @@ async fn check_monero_light_open_invoices(
             config,
             payout_address,
             view_key,
-        );
+        )?;
         let payment_address = parse_monero_address(&payment_address)
             .map_err(|_| DatabaseError::type_error())?;
         let payment_id = get_payment_id(payment_address)
@@ -629,7 +629,7 @@ async fn check_monero_light_paid_invoices(
             config,
             payout_address,
             view_key,
-        );
+        )?;
         let (tx_amount, confirmations) = lw_client.get_tx_info(payout_tx_id).await?;
         if confirmations < config.tx_required_confirmations {
             // Wait for more confirmations
@@ -710,7 +710,7 @@ pub async fn check_monero_light_payments(
             config,
             payout_address,
             view_key,
-        );
+        )?;
         // Get new transactions
         let since_date = maybe_invoice
             .as_ref()
