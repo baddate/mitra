@@ -1027,7 +1027,8 @@ dependencies = [
 [[package]]
 name = "diqwest"
 version = "3.2.0"
-source = "git+https://github.com/silverpill/diqwest?rev=2be6719a87215f977f59bc3fed374ff0e1c6ef27#2be6719a87215f977f59bc3fed374ff0e1c6ef27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d10611d0d3ed31b33e13ec3e31329aa2053aa4f773eb082b597f39a97e68360"
 dependencies = [
  "digest_auth",
  "reqwest",
@@ -2306,7 +2307,8 @@ dependencies = [
 [[package]]
 name = "monero-lws"
 version = "0.4.0"
-source = "git+https://github.com/silverpill/monero-lws-rs?rev=b5b9475cbad9eed9b0f42bf320bf6883e0539ccf#b5b9475cbad9eed9b0f42bf320bf6883e0539ccf"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6aab3f4786e863a3cd79b67f3df78330a1dcc8cb1ed63c08df7a3822f8d569df"
 dependencies = [
  "anyhow",
  "fixed-hash",
@@ -2323,7 +2325,8 @@ dependencies = [
 [[package]]
 name = "monero-rpc"
 version = "0.6.0"
-source = "git+https://github.com/silverpill/monero-rpc-rs?rev=9d582cc06679baaf8b7c6376a4fa2369d7ffc2ec#9d582cc06679baaf8b7c6376a4fa2369d7ffc2ec"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43777099e1e5077425e407a7b61957b429f0f16cfba626117d5725da0a5ecebd"
 dependencies = [
  "anyhow",
  "chrono",

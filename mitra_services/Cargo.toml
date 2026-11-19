@@ -22,9 +22,9 @@ log = "0.4.20"
 # Used to work with Monero addresses
 monero = "0.22.0"
 # Used to work with monero-wallet-rpc
-monero-rpc = { git = "https://github.com/silverpill/monero-rpc-rs", rev = "9d582cc06679baaf8b7c6376a4fa2369d7ffc2ec", default-features = false, features = ["rpc_authentication", "rustls-tls-no-provider"] }
+monero-rpc = { version = "0.6.0", default-features = false, features = ["rpc_authentication", "rustls-tls-no-provider"] }
 # Used to work with monero-lws API
-monero-lws = { git = "https://github.com/silverpill/monero-lws-rs", rev = "b5b9475cbad9eed9b0f42bf320bf6883e0539ccf" }
+monero-lws = { version = "0.4.0" }
 # Used for working with regular expressions
 regex = "1.10.6"
 # Used for making async HTTP requests
