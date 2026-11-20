@@ -1,9 +1,20 @@
+use std::error::{Error as _ErrorTrait};
 use thiserror::Error;
 use tokio_postgres::error::{Error as PostgresError, SqlState};
 
 #[derive(Debug, Error)]
 #[error("database type error")]
 pub struct DatabaseTypeError;
+
+// Restores the behavior of tokio-postgres 0.7.14
+// https://github.com/rust-postgres/rust-postgres/issues/1284
+fn describe_postgres_error(error: &PostgresError) -> String {
+    let mut message = error.to_string();
+    if let Some(source) = error.source() {
+        message += &format!(": {source}");
+    };
+    message
+}
 
 #[derive(Debug, Error)]
 pub enum DatabaseError {
@@ -13,7 +24,7 @@ pub enum DatabaseError {
     #[error("database query error")]
     QueryError(#[from] postgres_query::Error),
 
-    #[error(transparent)]
+    #[error("{}", describe_postgres_error(.0))]
     ClientError(#[from] PostgresError),
 
     #[error(transparent)]
