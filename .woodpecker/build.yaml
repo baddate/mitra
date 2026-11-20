@@ -7,10 +7,10 @@ steps:
     image: docker.io/debian:trixie
     environment:
       DEFAULT_CONFIG_PATH: /etc/mitra/config.yaml
-      RUST_VERSION: "1.89.0"
     commands:
       - apt update
       - apt install --yes build-essential musl-tools rustup
+      - RUST_VERSION=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
       - rustup toolchain install $RUST_VERSION --target x86_64-unknown-linux-musl
       - rustup default $RUST_VERSION
       - cargo build --locked --release --features production --target x86_64-unknown-linux-musl --jobs 4
