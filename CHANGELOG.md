@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [6.0.1] - 2026-11-20
+
 ### Changed
 
 - Changed MSRV to 1.89.
