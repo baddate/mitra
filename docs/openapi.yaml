@@ -88,7 +88,7 @@ paths:
                   nullable: true
                   example: null
                 scope:
-                  description: When `grant_type` is not `authorization_cod`, the list of requested OAuth scopes, separated by spaces. Must be a subset of the scopes requested at the time the application was created.
+                  description: When `grant_type` is not `authorization_code`, the list of requested OAuth scopes, separated by spaces. Must be a subset of the scopes requested at the time the application was created.
                   type: string
                   example: "read write"
               required:
