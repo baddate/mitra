@@ -1,0 +1,451 @@
+# .github/workflows/docker-publish.yml
+#
+# Build and publish the Mitra Docker image to GitHub Container Registry (ghcr.io).
+#
+# Architecture:
+#   build   – matrix job: amd64 and arm64 run in parallel on native runners.
+#             Each job pushes a per-arch image digest (not yet tagged).
+#   merge   – collects both digests and creates a single multi-arch manifest,
+#             then applies all final tags (latest, semver, sha).
+#
+# Why matrix instead of QEMU?
+#   QEMU emulates the foreign arch in software – arm64 Rust compilation under
+#   QEMU on an amd64 host can take 3-5× longer than native.  Running each arch
+#   on its own runner eliminates emulation overhead entirely.
+#
+# Triggers:
+#   push to main  → :latest
+#   semver tag    → :1.2.3  :1.2  :1  :latest
+#   pull request  → build only (no push)
+#   manual        → workflow_dispatch
+#
+# Backend version selection:
+#   MITRA_VERSION controls which backend ref is checked out.
+#     - tag push (or manual run against a tag): follows the tag automatically
+#     - anything else (push to main, manual run against a branch): falls back
+#       to the "MITRA_VERSION" repository variable, or "main" if unset
+#   Note: pull_request builds always check out the PR's own ref (unaffected
+#   by MITRA_VERSION), so PR checks validate the PR's actual changes.
+#
+# Required secrets / variables:
+#   None   – GITHUB_TOKEN is supplied automatically.
+#
+# Optional repository variables (Settings → Variables):
+#   FRONTEND_REPO    override the mitra-web git URL
+#   FRONTEND_BRANCH  override the mitra-web branch (default: main)
+#   MITRA_VERSION    override the backend ref for non-tag builds (default: main)
+#
+# Note on VITE_BACKEND_URL:
+#   The frontend is always built with a fixed placeholder string
+#   (__PLACEHOLDER_MITRA_BACKEND_URL__) baked in at build time. The actual
+#   backend URL is substituted at *container start* by entrypoint.sh, based
+#   on the VITE_BACKEND_URL environment variable passed to `docker run` /
+#   compose. This keeps the image portable across environments — do not wire
+#   a repository variable into the build-arg here, or the runtime
+#   substitution will silently stop working (see entrypoint.sh).
+
+name: Docker
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+  FRONTEND_REPO: ${{ vars.FRONTEND_REPO || 'https://codeberg.org/silverpill/mitra-web.git' }}
+  FRONTEND_BRANCH: ${{ vars.FRONTEND_BRANCH || 'main' }}
+  # tag push (or manual dispatch against a tag) → follow the tag automatically.
+  # Everything else (push to main, manual dispatch against a branch) → use the
+  # MITRA_VERSION repository variable, falling back to "main".
+  # pull_request is intentionally NOT special-cased here: PR builds should
+  # keep checking out the PR's own ref, not a pinned version.
+  MITRA_VERSION: ${{ (github.ref_type == 'tag' && github.ref_name) || vars.MITRA_VERSION || 'main' }}
+  VITE_BACKEND_URL_PLACEHOLDER: __PLACEHOLDER_MITRA_BACKEND_URL__
+
+# ---------------------------------------------------------------------------
+# Job 1 – build
+# Runs twice in parallel: once for amd64, once for arm64.
+# Each run pushes a bare digest (no human-readable tag) and uploads the
+# digest string as an artifact so the merge job can find it.
+# ---------------------------------------------------------------------------
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: read
+      packages: write
+      # Currently unused: the SARIF upload step below is commented out, so
+      # Trivy only gates the build via exit-code. Kept here so re-enabling
+      # "Upload Trivy SARIF" doesn't also require a permissions PR.
+      security-events: write
+
+    strategy:
+      fail-fast: false # let the other arch finish even if one fails
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      #    ref is pinned via MITRA_VERSION (see env block above), except for
+      #    pull_request events which keep actions/checkout's default behavior
+      #    of checking out the PR's own merge ref.
+      # -----------------------------------------------------------------------
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name != 'pull_request' && env.MITRA_VERSION || '' }}
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Docker Buildx
+      #    No QEMU needed – each runner is already the target architecture.
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # -----------------------------------------------------------------------
+      # 3. Log in to GHCR & Docker Hub
+      # -----------------------------------------------------------------------
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 4. Derive labels (tags are applied later by the merge job)
+      # -----------------------------------------------------------------------
+      - name: Compute image metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
+
+      - name: Build for scan (amd64 only)
+        if: matrix.platform == 'linux/amd64'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: contrib/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:scan-target
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FRONTEND_REPO=${{ env.FRONTEND_REPO }}
+            FRONTEND_BRANCH=${{ env.FRONTEND_BRANCH }}
+            VITE_BACKEND_URL=${{ env.VITE_BACKEND_URL_PLACEHOLDER }}
+          cache-from: type=gha,scope=mitra-${{ matrix.platform }}
+          cache-to: type=gha,scope=mitra-${{ matrix.platform }},mode=max
+
+      - name: Manual Trivy Setup
+        if: matrix.platform == 'linux/amd64'
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          cache: true
+          version: v0.71.0
+
+      - name: Trivy vulnerability scan
+        if: matrix.platform == 'linux/amd64'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}:scan-target
+          format: table
+          # output: trivy-results.sarif
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          skip-setup-trivy: true
+
+      # - name: Upload Trivy SARIF
+      #   if: matrix.platform == 'linux/amd64' && always()
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   with:
+      #     sarif_file: trivy-results.sarif
+
+      # -----------------------------------------------------------------------
+      # 5. Build and push a digest-only image, once per registry.
+      #
+      #    NOTE: build-push-action's `outputs: type=image,name=A,B,...` with a
+      #    comma-separated list of registries in a single `name=` is a known
+      #    broken pattern (see docker/build-push-action#1067 /
+      #    docker/buildx#2232) – only the last name reliably gets pushed, even
+      #    though the raw buildx CLI documents multi-name as supported. So we
+      #    build once and push the resulting image to each registry with its
+      #    own `outputs` entry instead of trying to fan out from one step.
+      #
+      #    `push-by-digest=true` pushes the image without attaching any
+      #    human-readable tag – just a raw sha256 digest in the registry.
+      #    The merge job creates the manifest + final tags from these digests.
+      #
+      #    Both pushes share the same build via `cache-from`/`cache-to` on the
+      #    same GHA cache scope, so the second push is a fast cache hit rather
+      #    than a full rebuild.
+      # -----------------------------------------------------------------------
+      - name: Build and push by digest (GHCR)
+        id: build-ghcr
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: contrib/docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=${{ github.event_name != 'pull_request' }},name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          build-args: |
+            FRONTEND_REPO=${{ env.FRONTEND_REPO }}
+            FRONTEND_BRANCH=${{ env.FRONTEND_BRANCH }}
+            VITE_BACKEND_URL=${{ env.VITE_BACKEND_URL_PLACEHOLDER }}
+          # Per-arch cache bucket so the two jobs never overwrite each other.
+          cache-from: type=gha,scope=mitra-${{ matrix.platform }}
+          cache-to: type=gha,scope=mitra-${{ matrix.platform }},mode=max
+
+      - name: Build and push by digest (Docker Hub)
+        id: build-dockerhub
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: contrib/docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          build-args: |
+            FRONTEND_REPO=${{ env.FRONTEND_REPO }}
+            FRONTEND_BRANCH=${{ env.FRONTEND_BRANCH }}
+            VITE_BACKEND_URL=${{ env.VITE_BACKEND_URL_PLACEHOLDER }}
+          # Same cache scope as the GHCR push above → this is a cache hit,
+          # not a rebuild, so the two pushes stay in sync from one build.
+          cache-from: type=gha,scope=mitra-${{ matrix.platform }}
+          cache-to: type=gha,scope=mitra-${{ matrix.platform }},mode=max
+
+      # -----------------------------------------------------------------------
+      # 6. Export the digest to a file and upload it as a workflow artifact.
+      #    The merge job downloads all arch artifacts and reads the digests.
+      #
+      #    GHCR and Docker Hub digests must be identical (same content, same
+      #    sha256 algorithm, pushed from the same build). We assert that
+      #    explicitly here so a registry-specific push failure is caught in
+      #    this job with a clear error, instead of surfacing later as a
+      #    confusing "blob not found" from `imagetools create` in the merge
+      #    job. Once verified equal, only one digest needs to be recorded –
+      #    the merge job's SOURCES_GHCR / SOURCES_DH construction reuses the
+      #    same digest value against each registry's own image name.
+      # -----------------------------------------------------------------------
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+
+          ghcr_digest="${{ steps.build-ghcr.outputs.digest }}"
+          dockerhub_digest="${{ steps.build-dockerhub.outputs.digest }}"
+
+          test -n "$ghcr_digest"
+          test -n "$dockerhub_digest"
+
+          if [ "$ghcr_digest" != "$dockerhub_digest" ]; then
+            echo "::error::GHCR digest ($ghcr_digest) and Docker Hub digest ($dockerhub_digest) differ for ${{ matrix.platform }}. Refusing to continue since the merge job assumes a single shared digest per platform."
+            exit 1
+          fi
+
+          # Write an empty file whose *name* is the digest (sha256: prefix stripped).
+          touch "/tmp/digests/${ghcr_digest#sha256:}"
+
+      - name: Upload digest artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Job 2 – merge
+  # Downloads both digest artifacts, creates a multi-arch manifest list, and
+  # pushes all final tags (latest, semver, sha, etc.).
+  # ---------------------------------------------------------------------------
+  merge:
+    name: Merge manifests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    needs: build
+
+    permissions:
+      contents: read
+      packages: write
+      # Required for keyless cosign signing via OIDC
+      id-token: write
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Download digest files from both arch jobs
+      # -----------------------------------------------------------------------
+      - name: Download digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true # flatten into a single directory
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Buildx (needed for `docker buildx imagetools`)
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # -----------------------------------------------------------------------
+      # 3. Log in to GHCR & Docker Hub
+      # -----------------------------------------------------------------------
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 4. Compute final tags
+      # -----------------------------------------------------------------------
+      - name: Compute final tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
+
+      # -----------------------------------------------------------------------
+      # 5. Create and push the multi-arch manifest
+      #    Reads every file in /tmp/digests (one per arch), assembles them into
+      #    a manifest list, and tags it with all computed tags.
+      # -----------------------------------------------------------------------
+      - name: Create multi-arch manifest and push tags
+        working-directory: /tmp/digests
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          set -euo pipefail
+          echo "Available digests:"
+          ls -l
+
+          # Extract and isolate tags for each registry
+          TAGS_GHCR=$(echo "$META_JSON" | jq -cr '.tags | map(select(contains("ghcr.io"))) | map("-t " + .) | join(" ")')
+          TAGS_DH=$(echo "$META_JSON" | jq -cr '.tags | map(select(contains("docker.io"))) | map("-t " + .) | join(" ")')
+
+          # Prepare sources for each registry
+          SOURCES_GHCR=$(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
+          SOURCES_DH=$(printf 'docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}@sha256:%s ' *)
+
+          echo "Creating and pushing GHCR manifest..."
+          eval docker buildx imagetools create $TAGS_GHCR $SOURCES_GHCR
+
+          echo "Creating and pushing Docker Hub manifest..."
+          eval docker buildx imagetools create $TAGS_DH $SOURCES_DH
+
+      # -----------------------------------------------------------------------
+      # 6. Verify both manifests look correct
+      #    GHCR and Docker Hub each got their own `imagetools create` call
+      #    above, so each has its own manifest-list digest – these are NOT
+      #    guaranteed to match each other (registries can normalize manifest
+      #    JSON differently), even though the underlying per-arch image
+      #    digests are identical. Inspect both explicitly.
+      # -----------------------------------------------------------------------
+      - name: Inspect GHCR manifest
+        run: |
+          docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+
+      - name: Inspect Docker Hub manifest
+        run: |
+          docker buildx imagetools inspect \
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}:${{ steps.meta.outputs.version }}
+
+      # -----------------------------------------------------------------------
+      # 7. Keyless cosign signing via Sigstore OIDC – no secrets needed.
+      #    Identity is bound to this exact Actions run and verifiable by anyone.
+      #
+      #    Each registry's manifest-list digest is looked up independently and
+      #    only the tags belonging to that registry are signed against it.
+      #    (Signing a docker.io tag against a ghcr.io digest, or vice versa,
+      #    would silently point cosign at a manifest that doesn't exist in
+      #    that registry.)
+      #
+      #    Verify with:
+      #      cosign verify ghcr.io/<org>/mitra:latest \
+      #        --certificate-identity-regexp="https://github.com/<org>/mitra/.*" \
+      #        --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
+      # -----------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.0
+
+      - name: Sign multi-arch manifests (keyless)
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          set -euo pipefail
+
+          GHCR_REF="${{ env.REGISTRY }}/${{ env.IMAGE }}"
+          DH_REF="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}"
+
+          GHCR_DIGEST=$(docker buildx imagetools inspect "${GHCR_REF}:${{ steps.meta.outputs.version }}" \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')
+          DH_DIGEST=$(docker buildx imagetools inspect "${DH_REF}:${{ steps.meta.outputs.version }}" \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')
+
+          echo "Signing GHCR tags @ ${GHCR_DIGEST}"
+          echo "$META_JSON" | jq -r '.tags[] | select(contains("ghcr.io"))' | \
+            tr '\n' '\0' | xargs -0 -I {} cosign sign --yes "{}@${GHCR_DIGEST}"
+
+          echo "Signing Docker Hub tags @ ${DH_DIGEST}"
+          echo "$META_JSON" | jq -r '.tags[] | select(contains("docker.io"))' | \
+            tr '\n' '\0' | xargs -0 -I {} cosign sign --yes "{}@${DH_DIGEST}"

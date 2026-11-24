@@ -1,40 +1,140 @@
-FROM alpine:3.24 AS base
+# syntax=docker/dockerfile:1.4
+#
+# Multi-stage Dockerfile for Mitra
+# Build context must be the project root:
+#   docker build -f contrib/docker/Dockerfile -t mitra .
+#
+# Stages:
+#   frontend-build  – clones and builds the mitra-web SPA
+#   chef            – base image with cargo-chef installed (shared)
+#   planner         – analyses Cargo workspace, emits recipe.json
+#   builder         – cooks deps (cached), then builds the Rust binary
+#   runtime         – minimal Alpine image that ships to production
 
-FROM base AS builder
-RUN apk add --no-cache \
-    gcc \
-    musl-dev \
-    rust \
-    cargo
-WORKDIR /app/mitra
-ENV DEFAULT_CONFIG_PATH=/etc/mitra/config.yaml
+# -----------------------------------------------------------------------------
+# Stage 1 – Frontend (Node)
+# Clone mitra-web and produce a static dist/ bundle.
+# -----------------------------------------------------------------------------
+FROM node:24-alpine AS frontend-build
+
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache git
+
+WORKDIR /app
+
+# Allow overriding the frontend repo and branch at build time
+ARG FRONTEND_REPO=https://codeberg.org/silverpill/mitra-web.git
+ARG FRONTEND_BRANCH=main
+
+RUN git clone --depth 1 --branch "$FRONTEND_BRANCH" "$FRONTEND_REPO" .
+
+ARG VITE_BACKEND_URL=__PLACEHOLDER_MITRA_BACKEND_URL__
+ENV VITE_BACKEND_URL=$VITE_BACKEND_URL
+
+# npm ci is faster and strictly reproducible compared to npm install
+RUN npm ci --prefer-offline \
+ && npm run build
+
+# -----------------------------------------------------------------------------
+# Stage 2 – cargo-chef base
+# Install cargo-chef once; reused by both planner and builder stages so the
+# installation layer is cached and never re-downloaded.
+# -----------------------------------------------------------------------------
+FROM rust:alpine AS chef
+
+# musl-dev provides the C headers needed by some *-sys crates under musl libc
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache musl-dev \
+ && cargo install cargo-chef --locked
+
+WORKDIR /app
+
+# -----------------------------------------------------------------------------
+# Stage 3 – Planner
+# Inspect Cargo.toml / Cargo.lock and produce a build "recipe" that captures
+# the exact set of dependencies without needing the full source tree.
+# This stage is invalidated only when Cargo.toml or Cargo.lock change.
+# -----------------------------------------------------------------------------
+FROM chef AS planner
+
+# For a Cargo workspace, cargo metadata needs the full source tree to resolve
+# all workspace members. Copy everything; prepare itself is nearly instant.
 COPY . .
+
+# If this is a Cargo workspace, uncomment and adjust the line below:
+# COPY crates/ crates/
+
+RUN cargo chef prepare --recipe-path recipe.json
+
+
+# -----------------------------------------------------------------------------
+# Stage 4 – Builder
+# Two-step compilation:
+#   1. `cargo chef cook`  – compiles dependencies only (cached when recipe
+#                           is unchanged, even if src/ changes)
+#   2. `cargo build`      – compiles the application itself
+# -----------------------------------------------------------------------------
+FROM chef AS builder
+
+# Restore the dependency recipe from the planner stage
+COPY --from=planner /app/recipe.json recipe.json
+
+# Cook (compile) dependencies. This layer is re-used on every subsequent build
+# as long as recipe.json stays the same, saving several minutes per iteration.
+RUN cargo chef cook --release --features production --recipe-path recipe.json
+
+# Now copy the full source. Only layers from here onward are invalidated by
+# application source changes.
+COPY . .
+
+# Build the final binary
 RUN cargo build --release --features production
 
-FROM base AS web
-# libgcc is needed to prevent "symbol not found" errors when executing `mitra --version`
-RUN apk add --no-cache nodejs npm jq libgcc
-WORKDIR /app/mitra-web
-COPY --from=builder /app/mitra/target/release/mitra /usr/bin/mitra
-RUN export version=$(mitra --version | cut -d ' ' -f 2) && \
-    export url=$( \
-        (wget -O- "https://codeberg.org/api/v1/repos/silverpill/mitra-web/tags/v${version}" | jq -re '.tarball_url') || \
-        echo "https://codeberg.org/api/v1/repos/silverpill/mitra-web/archive/main.tar.gz" \
-    ) && \
-    wget -O /tmp/mitra-web.tar.gz $url
-RUN tar --strip-components=1 -xvf /tmp/mitra-web.tar.gz mitra-web
-RUN npm install --no-save
-RUN npx allow-scripts
-ENV VITE_BACKEND_URL=
-RUN npm run build
+# -----------------------------------------------------------------------------
+# Stage 5 – Runtime
+# Minimal Alpine image: only the binary, frontend assets, and ca-certificates.
+# No compiler, no Rust toolchain, no build artefacts.
+# -----------------------------------------------------------------------------
+FROM alpine:3.24
 
-FROM base AS prod
-RUN apk add --no-cache ca-certificates libgcc
-WORKDIR /usr/bin
-RUN mkdir -p /var/lib/mitra && \
-    mkdir -p /etc/mitra
-COPY --from=web /app/mitra-web/dist /usr/share/mitra/www
-COPY --from=builder /app/mitra/target/release/mitra .
-COPY --from=builder /app/mitra/config.example.yaml /usr/share/mitra/examples/
-RUN cp -n /usr/share/mitra/examples/config.example.yaml /etc/mitra/config.yaml
-CMD [ "mitra", "server" ]
+# ca-certificates: required for outgoing TLS connections (e.g. federation)
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates
+
+# Create a dedicated non-root user for the service
+RUN addgroup -S mitra \
+ && adduser  -S -G mitra mitra
+
+# Prepare runtime directories
+RUN mkdir -p \
+      /var/lib/mitra \
+      /etc/mitra \
+      /usr/share/mitra/www \
+ && chown -R mitra:mitra /var/lib/mitra /etc/mitra
+
+# Frontend static assets
+COPY --chown=mitra:mitra --from=frontend-build /app/dist /usr/share/mitra/www/
+
+# Application binary
+COPY --chown=mitra:mitra --from=builder /app/target/release/mitra /usr/bin/mitra
+
+# Copy the entrypoint script into the image and make it executable
+COPY contrib/docker/entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+USER mitra
+
+# Default config path; supports both yaml and toml formats.
+# Override at runtime with -e CONFIG_PATH=/path/to/config.toml
+ENV CONFIG_PATH=/etc/mitra/config.yaml
+
+# Expose the default HTTP port (override in config if needed)
+EXPOSE 8080
+
+# The Entrypoint handles runtime environment injection
+ENTRYPOINT ["entrypoint.sh"]
+
+CMD ["mitra", "server"]
